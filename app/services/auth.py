@@ -15,7 +15,8 @@ from app.models.auth import (
     AuthResponse,
     TokenPayload,
     EmployeeCreate,
-    EmployeeResponse
+    EmployeeResponse,
+    UserRole
 )
 
 logger = logging.getLogger(__name__)
@@ -132,8 +133,14 @@ class AuthService:
         except HTTPException:
             raise
         except Exception as e:
+            logger.error(f"Error en registro de usuario: {e}")
             from app.services.rate_limit_handler import handle_supabase_auth_error
             handle_supabase_auth_error(e, "register")
+            # Si handle_supabase_auth_error no lanza excepción, lanzar error genérico
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Error interno del servidor"
+            )
 
     async def login_user(self, login_data: UserLogin) -> AuthResponse:
         """Iniciar sesión de usuario"""
@@ -178,7 +185,7 @@ class AuthService:
             user_response = UserResponse(
                 id=user_data["id"],
                 email=user_data["email"],
-                role=user_data["role"],
+                role=UserRole(user_data["role"]),
                 created_at=datetime.fromisoformat(user_data["created_at"].replace('Z', '+00:00')),
                 updated_at=datetime.fromisoformat(user_data["updated_at"].replace('Z', '+00:00')) if user_data["updated_at"] else None
             )
@@ -208,6 +215,9 @@ class AuthService:
             raise
         except Exception as e:
             logger.error(f"Error en login de usuario: {e}")
+            from app.services.rate_limit_handler import handle_supabase_auth_error
+            handle_supabase_auth_error(e, "login")
+            # Si handle_supabase_auth_error no lanza excepción, lanzar error genérico
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Error interno del servidor"
@@ -231,7 +241,7 @@ class AuthService:
             return UserResponse(
                 id=user_data["id"],
                 email=user_data["email"],
-                role=user_data["role"],
+                role=UserRole(user_data["role"]),
                 created_at=datetime.fromisoformat(user_data["created_at"].replace('Z', '+00:00')),
                 updated_at=datetime.fromisoformat(user_data["updated_at"].replace('Z', '+00:00')) if user_data["updated_at"] else None
             )
