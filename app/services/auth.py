@@ -1,13 +1,10 @@
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Optional, Dict, Any
 import logging
-from jose import JWTError, jwt
-from passlib.context import CryptContext
 from fastapi import HTTPException, status
 from postgrest.exceptions import APIError
 
 from app.database import supabase
-from app.config import settings
 from app.models.auth import (
     UserRegister,
     UserLogin,
@@ -15,48 +12,39 @@ from app.models.auth import (
     AuthResponse,
     TokenPayload,
     EmployeeCreate,
-    EmployeeResponse
+    EmployeeResponse,
+    UserRole
 )
 
 logger = logging.getLogger(__name__)
 
 class AuthService:
     def __init__(self):
-        self.pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+        pass
 
-    def verify_password(self, plain_password: str, hashed_password: str) -> bool:
-        return self.pwd_context.verify(plain_password, hashed_password)
-
-    def get_password_hash(self, password: str) -> str:
-        return self.pwd_context.hash(password)
-
-    def create_access_token(self, data: dict, expires_delta: Optional[timedelta] = None) -> str:
-        to_encode = data.copy()
-        if expires_delta:
-            expire = datetime.utcnow() + expires_delta
-        else:
-            expire = datetime.utcnow() + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
-
-        to_encode.update({"exp": expire})
-        encoded_jwt = jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
-        return encoded_jwt
-
-    def verify_token(self, token: str) -> TokenPayload:
+    def verify_supabase_token(self, token: str) -> TokenPayload:
+        """Verificar token usando Supabase Auth"""
         try:
-            payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
-            user_id: str = payload.get("sub")
-            email: str = payload.get("email")
-            role: str = payload.get("role")
+            # Usar Supabase para obtener el usuario del token
+            user_response = supabase.auth.get_user(token)
 
-            if user_id is None or email is None:
+            if not user_response.user:
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,
                     detail="Token inválido",
                     headers={"WWW-Authenticate": "Bearer"},
                 )
 
+            user_id = user_response.user.id
+            email = user_response.user.email
+
+            # Obtener el rol desde la tabla users
+            user_query = supabase.table("users").select("role").eq("id", user_id).execute()
+            role = user_query.data[0]["role"] if user_query.data else None
+
             return TokenPayload(sub=user_id, email=email, role=role)
-        except JWTError:
+        except Exception as e:
+            logger.error(f"Error al verificar token: {e}")
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Token inválido",
@@ -105,15 +93,8 @@ class AuthService:
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                     detail="Error al crear usuario"
                 )
-            access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
-            access_token = self.create_access_token(
-                data={
-                    "sub": user_id,
-                    "email": user_data.email,
-                    "role": user_data.role.value
-                },
-                expires_delta=access_token_expires
-            )
+
+            # Usar el token de Supabase directamente
             user_response = UserResponse(
                 id=user_id,
                 email=user_data.email,
@@ -123,20 +104,26 @@ class AuthService:
             )
 
             return AuthResponse(
-                access_token=access_token,
+                access_token=auth_response.session.access_token if auth_response.session else "",
                 token_type="bearer",
-                expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+                expires_in=auth_response.session.expires_in if auth_response.session else 3600,
                 user=user_response
             )
 
         except HTTPException:
             raise
         except Exception as e:
+            logger.error(f"Error en registro de usuario: {e}")
             from app.services.rate_limit_handler import handle_supabase_auth_error
             handle_supabase_auth_error(e, "register")
+            # Si handle_supabase_auth_error no lanza excepción, lanzar error genérico
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Error interno del servidor"
+            )
 
     async def login_user(self, login_data: UserLogin) -> AuthResponse:
-        """Iniciar sesión de usuario"""
+        """Iniciar sesión de usuario usando Supabase Auth"""
         try:
             # 1. Autenticar con Supabase Auth
             auth_response = supabase.auth.sign_in_with_password({
@@ -163,27 +150,16 @@ class AuthService:
 
             user_data = user_query.data[0]
 
-            # 3. Crear token de acceso personalizado (opcional, puedes usar el de Supabase)
-            access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
-            access_token = self.create_access_token(
-                data={
-                    "sub": user_id,
-                    "email": user_data["email"],
-                    "role": user_data["role"]
-                },
-                expires_delta=access_token_expires
-            )
-
-            # 4. Crear respuesta
+            # 3. Crear respuesta usando el token de Supabase
             user_response = UserResponse(
                 id=user_data["id"],
                 email=user_data["email"],
-                role=user_data["role"],
+                role=UserRole(user_data["role"]),
                 created_at=datetime.fromisoformat(user_data["created_at"].replace('Z', '+00:00')),
                 updated_at=datetime.fromisoformat(user_data["updated_at"].replace('Z', '+00:00')) if user_data["updated_at"] else None
             )
 
-            # 5. Registrar login en audit_logs
+            # 4. Registrar login en audit_logs
             try:
                 supabase.table("audit_logs").insert({
                     "user_id": user_id,
@@ -198,9 +174,9 @@ class AuthService:
                 logger.warning(f"Error al registrar login en audit: {e}")
 
             return AuthResponse(
-                access_token=access_token,
+                access_token=auth_response.session.access_token,
                 token_type="bearer",
-                expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+                expires_in=auth_response.session.expires_in,
                 user=user_response
             )
 
@@ -208,14 +184,17 @@ class AuthService:
             raise
         except Exception as e:
             logger.error(f"Error en login de usuario: {e}")
+            from app.services.rate_limit_handler import handle_supabase_auth_error
+            handle_supabase_auth_error(e, "login")
+            # Si handle_supabase_auth_error no lanza excepción, lanzar error genérico
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Error interno del servidor"
             )
 
     async def get_current_user(self, token: str) -> UserResponse:
-        """Obtener usuario actual desde token"""
-        token_data = self.verify_token(token)
+        """Obtener usuario actual desde token usando Supabase Auth"""
+        token_data = self.verify_supabase_token(token)
 
         try:
             user_query = supabase.table("users").select("*").eq("id", token_data.sub).execute()
@@ -231,7 +210,7 @@ class AuthService:
             return UserResponse(
                 id=user_data["id"],
                 email=user_data["email"],
-                role=user_data["role"],
+                role=UserRole(user_data["role"]),
                 created_at=datetime.fromisoformat(user_data["created_at"].replace('Z', '+00:00')),
                 updated_at=datetime.fromisoformat(user_data["updated_at"].replace('Z', '+00:00')) if user_data["updated_at"] else None
             )
