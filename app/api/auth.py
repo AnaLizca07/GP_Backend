@@ -1,103 +1,95 @@
-from fastapi import APIRouter, HTTPException, status, Depends
-from datetime import timedelta
-from app.schemas.user import UserLogin, Token, UserCreate
-from app.utils.auth import create_access_token, get_password_hash
-from app.utils.database import supabase
-from app.config import settings
+from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from typing import Annotated
+
+from app.models.auth import (
+    UserRegister,
+    UserLogin,
+    UserResponse,
+    AuthResponse,
+    PasswordReset,
+    EmployeeCreate,
+    EmployeeResponse,
+    ErrorResponse
+)
+from app.services.auth import auth_service
 
 router = APIRouter()
+security = HTTPBearer()
 
-@router.post("/register", response_model=Token)
-async def register(user: UserCreate):
+async def get_current_user(
+    credentials: Annotated[HTTPAuthorizationCredentials, Depends(security)]
+) -> UserResponse:
+    return await auth_service.get_current_user(credentials.credentials)
+
+@router.post("/register", response_model=AuthResponse, status_code=status.HTTP_201_CREATED)
+async def register(user_data: UserRegister):
     """Registrar nuevo usuario"""
-    try:
-        # Crear usuario en Supabase Auth
-        auth_response = supabase.auth.sign_up({
-            "email": user.email,
-            "password": user.password
-        })
-        
-        if not auth_response.user:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Could not create user"
-            )
-        
-        # Insertar en tabla users
-        user_data = {
-            "id": auth_response.user.id,
-            "email": user.email,
-            "role": user.role
-        }
-        
-        supabase.table("users").insert(user_data).execute()
-        
-        # Crear token
-        access_token = create_access_token(
-            data={"sub": auth_response.user.id, "email": user.email, "role": user.role},
-            expires_delta=timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
-        )
-        
-        return {
-            "access_token": access_token,
-            "token_type": "bearer",
-            "user": user_data
-        }
-        
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e)
-        )
+    return await auth_service.register_user(user_data)
 
-@router.post("/login", response_model=Token)
-async def login(credentials: UserLogin):
-    """Login de usuario"""
-    try:
-        # Autenticar con Supabase
-        auth_response = supabase.auth.sign_in_with_password({
-            "email": credentials.email,
-            "password": credentials.password
-        })
-        
-        if not auth_response.user:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Incorrect email or password"
-            )
-        
-        # Obtener datos del usuario
-        user_response = supabase.table("users").select("*").eq("id", auth_response.user.id).execute()
-        
-        if not user_response.data:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="User not found"
-            )
-        
-        user_data = user_response.data[0]
-        
-        # Crear token
-        access_token = create_access_token(
-            data={"sub": user_data["id"], "email": user_data["email"], "role": user_data["role"]},
-            expires_delta=timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
-        )
-        
-        return {
-            "access_token": access_token,
-            "token_type": "bearer",
-            "user": user_data
-        }
-        
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect email or password"
-        )
+@router.post("/login", response_model=AuthResponse)
+async def login(login_data: UserLogin):
+    """Iniciar sesión"""
+    return await auth_service.login_user(login_data)
+
+@router.get("/me", response_model=UserResponse)
+async def get_profile(current_user: UserResponse = Depends(get_current_user)):
+    """Obtener perfil del usuario actual"""
+    return current_user
+
+@router.post("/password-reset")
+async def reset_password(reset_data: PasswordReset):
+    """Enviar email de recuperación de contraseña"""
+    return await auth_service.reset_password(reset_data.email)
+
+@router.post("/employee-profile", response_model=EmployeeResponse, status_code=status.HTTP_201_CREATED)
+async def create_employee_profile(
+    employee_data: EmployeeCreate,
+    current_user: UserResponse = Depends(get_current_user)
+):
+    """Crear perfil de empleado"""
+    return await auth_service.create_employee_profile(employee_data, current_user)
 
 @router.post("/logout")
 async def logout():
-    """Logout de usuario"""
-    # Con JWT stateless, el logout se maneja en el frontend
-    # eliminando el token del localStorage
+    """Cerrar sesión"""
     return {"message": "Logged out successfully"}
+
+@router.get("/validate-manager")
+async def validate_manager_role(current_user: UserResponse = Depends(get_current_user)):
+    """Validar rol de manager"""
+    if current_user.role != "manager":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Acceso denegado: Se requiere rol de manager"
+        )
+    return {"message": "Acceso autorizado", "role": "manager", "user_id": current_user.id}
+
+@router.get("/validate-employee")
+async def validate_employee_role(current_user: UserResponse = Depends(get_current_user)):
+    """Validar rol de employee"""
+    if current_user.role != "employee":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Acceso denegado: Se requiere rol de employee"
+        )
+    return {"message": "Acceso autorizado", "role": "employee", "user_id": current_user.id}
+
+@router.get("/validate-sponsor")
+async def validate_sponsor_role(current_user: UserResponse = Depends(get_current_user)):
+    """Validar rol de sponsor"""
+    if current_user.role != "sponsor":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Acceso denegado: Se requiere rol de sponsor"
+        )
+    return {"message": "Acceso autorizado", "role": "sponsor", "user_id": current_user.id}
+
+@router.get("/rate-limit-status")
+async def get_rate_limit_status():
+    """Obtener estado del rate limiting"""
+    from app.services.rate_limit_handler import get_rate_limit_status
+    return {
+        "status": "ok",
+        "rate_limiting": get_rate_limit_status()
+    }
