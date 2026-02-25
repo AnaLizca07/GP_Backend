@@ -1,14 +1,7 @@
 from pydantic_settings import BaseSettings
 
-
 class Settings(BaseSettings):
-    # JWT
     JWT_SECRET: str = "secret-key"
     JWT_ALGORITHM: str = "HS256"
-
-    # Supabase
-    SUPABASE_URL: str = ""
-    SUPABASE_KEY: str = ""
-
 
 settings = Settings()

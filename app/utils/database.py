@@ -8,4 +8,11 @@ def get_supabase_client() -> Client:
     return create_client(settings.SUPABASE_URL, settings.SUPABASE_KEY)
 
 # Cliente global
-supabase: Client = get_supabase_client()
+supabase: Client | None = None
+
+
+def get_supabase():
+    global supabase
+    if supabase is None:
+        supabase = get_supabase_client()
+    return supabase

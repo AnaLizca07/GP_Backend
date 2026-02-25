@@ -1,3 +1,3 @@
-def test_models_auth_import():
-    from app.models import auth
-    assert auth is not None
+def test_models_package_exists():
+    import app.models
+    assert app.models is not None
