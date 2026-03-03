@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api import auth, employees, pyroll
 
 app = FastAPI(
-    title="PMIS - Sistema de Gestión de Proyectos",
+    title="PMIS Sistema de Gestión de Proyectos",
     description="API para sistema de gestión de proyectos con autenticación Supabase",
     version="1.0.0"
 )
@@ -15,7 +15,7 @@ app = FastAPI(
 # Configurar CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],  # Frontend URL
+    allow_origins=["http://localhost:5173"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
