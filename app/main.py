@@ -1,6 +1,10 @@
+# Cargar variables de entorno ANTES de cualquier importación
+from dotenv import load_dotenv
+load_dotenv()
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.api import auth
+from app.api import auth, employees, pyroll
 
 app = FastAPI(
     title="PMIS - Sistema de Gestión de Proyectos",
@@ -19,6 +23,8 @@ app.add_middleware(
 
 # Incluir routers
 app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
+app.include_router(employees.router, prefix="/api", tags=["employees"])
+app.include_router(pyroll.router, prefix="/api", tags=["payroll"])
 
 @app.get("/")
 async def root():

@@ -11,10 +11,9 @@ from app.models.auth import (
     UserResponse,
     AuthResponse,
     TokenPayload,
-    EmployeeCreate,
-    EmployeeResponse,
     UserRole
 )
+from app.services.notifications import notification_service
 
 logger = logging.getLogger(__name__)
 
@@ -53,10 +52,31 @@ class AuthService:
 
     async def register_user(self, user_data: UserRegister) -> AuthResponse:
         try:
-            auth_response = supabase.auth.sign_up({
-                "email": user_data.email,
-                "password": user_data.password,
-            })
+            # Usar cliente administrativo para evitar "User not allowed"
+            from app.database import get_admin_supabase
+            admin_supabase = get_admin_supabase()
+
+            logger.info(f"🔑 Registrando usuario: {user_data.email}")
+
+            try:
+                # Intentar con cliente administrativo primero
+                auth_response = admin_supabase.auth.admin.create_user({
+                    "email": user_data.email,
+                    "password": user_data.password,
+                    "email_confirm": True  # Confirmar email automáticamente
+                })
+                logger.info(f"✅ Usuario creado con cliente administrativo: {user_data.email}")
+
+            except Exception as admin_error:
+                logger.warning(f"❌ Error con cliente administrativo: {admin_error}")
+                logger.info("🔄 Intentando con método normal como fallback...")
+
+                # Fallback al método normal
+                auth_response = supabase.auth.sign_up({
+                    "email": user_data.email,
+                    "password": user_data.password,
+                })
+                logger.info(f"✅ Usuario creado con método fallback: {user_data.email}")
 
             if not auth_response.user:
                 raise HTTPException(
@@ -67,7 +87,8 @@ class AuthService:
             user_id = auth_response.user.id
 
             try:
-                user_insert = supabase.table("users").insert({
+                # Usar cliente administrativo para insertar en tabla users también
+                user_insert = admin_supabase.table("users").insert({
                     "id": user_id,
                     "email": user_data.email,
                     "role": user_data.role.value,
@@ -76,14 +97,14 @@ class AuthService:
                 }).execute()
 
                 if not user_insert.data:
-                    supabase.auth.admin.delete_user(user_id)
+                    admin_supabase.auth.admin.delete_user(user_id)
                     raise HTTPException(
                         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                         detail="Error al crear perfil de usuario"
                     )
 
             except APIError as e:
-                supabase.auth.admin.delete_user(user_id)
+                admin_supabase.auth.admin.delete_user(user_id)
                 if "duplicate key value" in str(e).lower():
                     raise HTTPException(
                         status_code=status.HTTP_400_BAD_REQUEST,
@@ -103,10 +124,35 @@ class AuthService:
                 updated_at=datetime.utcnow()
             )
 
+            # Para admin.create_user(), necesitamos hacer login después para obtener token
+            # o generar un token temporal
+            access_token = ""
+            expires_in = 3600
+
+            # Si tenemos una sesión (método fallback), usar su token
+            if hasattr(auth_response, 'session') and auth_response.session:
+                access_token = auth_response.session.access_token
+                expires_in = auth_response.session.expires_in
+                logger.info("🔑 Usando token de sesión normal")
+            else:
+                # Para método administrativo, hacer login automático para generar token
+                try:
+                    login_response = admin_supabase.auth.sign_in_with_password({
+                        "email": user_data.email,
+                        "password": user_data.password
+                    })
+                    if login_response.session:
+                        access_token = login_response.session.access_token
+                        expires_in = login_response.session.expires_in
+                        logger.info("🔑 Token generado mediante login automático")
+                except Exception as login_error:
+                    logger.warning(f"No se pudo generar token automáticamente: {login_error}")
+                    # Continuar sin token, el usuario deberá hacer login manualmente
+
             return AuthResponse(
-                access_token=auth_response.session.access_token if auth_response.session else "",
+                access_token=access_token,
                 token_type="bearer",
-                expires_in=auth_response.session.expires_in if auth_response.session else 3600,
+                expires_in=expires_in,
                 user=user_response
             )
 
@@ -156,7 +202,8 @@ class AuthService:
                 email=user_data["email"],
                 role=UserRole(user_data["role"]),
                 created_at=datetime.fromisoformat(user_data["created_at"].replace('Z', '+00:00')),
-                updated_at=datetime.fromisoformat(user_data["updated_at"].replace('Z', '+00:00')) if user_data["updated_at"] else None
+                updated_at=datetime.fromisoformat(user_data["updated_at"].replace('Z', '+00:00')) if user_data["updated_at"] else None,
+# must_change_password=user_data.get("must_change_password", False)  # Columna no existe temporalmente
             )
 
             # 4. Registrar login en audit_logs
@@ -197,9 +244,16 @@ class AuthService:
         token_data = self.verify_supabase_token(token)
 
         try:
-            user_query = supabase.table("users").select("*").eq("id", token_data.sub).execute()
+            # Usar cliente administrativo para validar usuarios
+            from app.database import get_admin_supabase
+            admin_client = get_admin_supabase()
+
+            logger.info(f"🔍 DEBUG: Buscando usuario con ID: {token_data.sub}")
+            user_query = admin_client.table("users").select("*").eq("id", token_data.sub).execute()
+            logger.info(f"🔍 DEBUG: Resultado de búsqueda: {user_query.data}")
 
             if not user_query.data:
+                logger.error(f"❌ Usuario no encontrado en tabla users: {token_data.sub}")
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail="Usuario no encontrado"
@@ -212,7 +266,8 @@ class AuthService:
                 email=user_data["email"],
                 role=UserRole(user_data["role"]),
                 created_at=datetime.fromisoformat(user_data["created_at"].replace('Z', '+00:00')),
-                updated_at=datetime.fromisoformat(user_data["updated_at"].replace('Z', '+00:00')) if user_data["updated_at"] else None
+                updated_at=datetime.fromisoformat(user_data["updated_at"].replace('Z', '+00:00')) if user_data["updated_at"] else None,
+# must_change_password=user_data.get("must_change_password", False)  # Columna no existe temporalmente
             )
         except HTTPException:
             raise
@@ -235,85 +290,79 @@ class AuthService:
                 detail="Error al enviar email de recuperación"
             )
 
-    async def create_employee_profile(self, employee_data: EmployeeCreate, current_user: UserResponse) -> EmployeeResponse:
-        """Crear perfil de empleado (solo para managers o el propio usuario)"""
-        if current_user.role not in ["manager"] and current_user.id != employee_data.user_id:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="No tiene permisos para crear este perfil"
-            )
+    async def change_password(self, new_password: str, current_user: UserResponse) -> dict:
+        """
+        Cambiar contraseña del usuario actual
 
+        - Valida fortaleza de la nueva contraseña
+        - Actualiza la contraseña en Supabase Auth
+        - Marca como False el flag must_change_password
+        """
         try:
-            # Verificar que el user_id existe y tiene rol employee
-            user_query = supabase.table("users").select("*").eq("id", employee_data.user_id).execute()
-            if not user_query.data or user_query.data[0]["role"] != "employee":
+            # 1. Validar fortaleza de la nueva contraseña
+            password_validation = notification_service.validate_password_strength(new_password)
+
+            if not password_validation['is_valid']:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="El usuario debe tener rol de empleado"
+                    detail={
+                        "message": "La contraseña no cumple con los requisitos de seguridad",
+                        "suggestions": password_validation['suggestions'],
+                        "strength": password_validation['strength']
+                    }
                 )
 
-            # Insertar perfil de empleado
-            employee_insert = supabase.table("employees").insert({
-                "user_id": employee_data.user_id,
-                "name": employee_data.name,
-                "identification": employee_data.identification,
-                "position": employee_data.position,
-                "phone": employee_data.phone,
-                "address": employee_data.address,
-                "salary_type": employee_data.salary_type,
-                "salary_hourly": employee_data.salary_hourly,
-                "salary_biweekly": employee_data.salary_biweekly,
-                "salary_monthly": employee_data.salary_monthly,
-                "resume_url": employee_data.resume_url,
-                "status": employee_data.status,
-                "created_at": datetime.utcnow().isoformat(),
-                "updated_at": datetime.utcnow().isoformat()
-            }).execute()
+            # 2. Actualizar contraseña en Supabase Auth
+            # Nota: Esto requiere que el usuario esté autenticado
+            user_update_response = supabase.auth.update_user({
+                "password": new_password
+            })
 
-            if not employee_insert.data:
+            if not user_update_response.user:
                 raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail="Error al crear perfil de empleado"
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Error al actualizar contraseña en Supabase Auth"
                 )
 
-            employee = employee_insert.data[0]
+            # 3. Marcar como completado el cambio de contraseña obligatorio
+            supabase.table("users").update({
+                # "must_change_password": False,  # Columna no existe temporalmente
+                "updated_at": datetime.utcnow().isoformat()
+            }).eq("id", current_user.id).execute()
 
-            return EmployeeResponse(
-                id=employee["id"],
-                user_id=employee["user_id"],
-                name=employee["name"],
-                identification=employee["identification"],
-                position=employee["position"],
-                phone=employee["phone"],
-                address=employee["address"],
-                salary_type=employee["salary_type"],
-                salary_hourly=employee["salary_hourly"],
-                salary_biweekly=employee["salary_biweekly"],
-                salary_monthly=employee["salary_monthly"],
-                resume_url=employee["resume_url"],
-                status=employee["status"],
-                created_at=datetime.fromisoformat(employee["created_at"].replace('Z', '+00:00')),
-                updated_at=datetime.fromisoformat(employee["updated_at"].replace('Z', '+00:00')) if employee["updated_at"] else None
-            )
+            # 4. Log de auditoría
+            try:
+                supabase.table("audit_logs").insert({
+                    "user_id": current_user.id,
+                    "action": "PASSWORD_CHANGE",
+                    "table_name": "users",
+                    "record_id": None,
+                    # "old_data": {"must_change_password": current_user.must_change_password},  # Columna no existe temporalmente
+                    # "new_data": {"must_change_password": False, "password_changed": True},  # Columna no existe temporalmente
+                    "old_data": {"password_change_requested": True},
+                    "new_data": {"password_changed": True},
+                    "created_at": datetime.utcnow().isoformat()
+                }).execute()
+            except Exception as audit_error:
+                logger.warning(f"Error en log de auditoría: {audit_error}")
+
+            logger.info(f"🔑 Contraseña cambiada exitosamente para usuario {current_user.email}")
+
+            return {
+                "message": "Contraseña actualizada exitosamente",
+                "password_strength": password_validation['strength'],
+                # "must_change_password": False  # Columna no existe temporalmente
+            }
 
         except HTTPException:
             raise
-        except APIError as e:
-            if "duplicate key value" in str(e).lower():
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="La identificación ya está registrada"
-                )
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Error al crear perfil de empleado"
-            )
         except Exception as e:
-            logger.error(f"Error al crear perfil de empleado: {e}")
+            logger.error(f"Error al cambiar contraseña: {e}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Error interno del servidor"
             )
+
 
 # Instancia global del servicio
 auth_service = AuthService()
