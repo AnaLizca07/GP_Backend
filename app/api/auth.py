@@ -8,8 +8,7 @@ from app.models.auth import (
     UserResponse,
     AuthResponse,
     PasswordReset,
-    EmployeeCreate,
-    EmployeeResponse,
+    PasswordUpdate,
     ErrorResponse
 )
 from app.services.auth import auth_service
@@ -42,13 +41,19 @@ async def reset_password(reset_data: PasswordReset):
     """Enviar email de recuperación de contraseña"""
     return await auth_service.reset_password(reset_data.email)
 
-@router.post("/employee-profile", response_model=EmployeeResponse, status_code=status.HTTP_201_CREATED)
-async def create_employee_profile(
-    employee_data: EmployeeCreate,
+@router.post("/change-password")
+async def change_password(
+    password_data: PasswordUpdate,
     current_user: UserResponse = Depends(get_current_user)
 ):
-    """Crear perfil de empleado"""
-    return await auth_service.create_employee_profile(employee_data, current_user)
+    """
+    Cambiar contraseña del usuario actual
+
+    - Valida fortaleza de la nueva contraseña
+    - Marca como completado el cambio obligatorio
+    - Usado especialmente para nuevos empleados con contraseña temporal
+    """
+    return await auth_service.change_password(password_data.password, current_user)
 
 @router.post("/logout")
 async def logout():
