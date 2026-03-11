@@ -1,10 +1,10 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-
 class Settings(BaseSettings):
     # Supabase
     SUPABASE_URL: str = ""
     SUPABASE_KEY: str = ""
+    SUPABASE_SERVICE_ROLE_KEY: str = ""   # 👈 AGREGA ESTA LÍNEA
 
     # JWT / Auth
     SECRET_KEY: str = "secret-key"
@@ -14,8 +14,6 @@ class Settings(BaseSettings):
     # Frontend
     FRONTEND_URL: str = "http://localhost:5173"
 
-    # Pydantic v2 settings
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
-
 
 settings = Settings()

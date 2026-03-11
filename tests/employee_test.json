@@ -1,0 +1,12 @@
+{
+  "email": "salogg018+empleado06@gmail.com",
+  "role": "employee",
+  "name": "Empleado Prueba 6",
+  "identification": "1234567896",
+  "position": "Auxiliar",
+  "phone": "3000000000",
+  "address": "Armenia, Quindío",
+  "salary_type": "monthly",
+  "salary_monthly": 1500000,
+  "status": "active"
+}
