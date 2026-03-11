@@ -4,7 +4,7 @@ import logging
 from fastapi import HTTPException, status
 from postgrest.exceptions import APIError
 
-from app.database import supabase
+from app.database import supabase, get_admin_supabase
 from app.models.auth import (
     UserRegister,
     UserLogin,
