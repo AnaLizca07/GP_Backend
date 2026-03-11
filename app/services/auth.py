@@ -253,13 +253,36 @@ class AuthService:
             logger.info(f"🔍 DEBUG: Resultado de búsqueda: {user_query.data}")
 
             if not user_query.data:
-                logger.error(f"❌ Usuario no encontrado en tabla users: {token_data.sub}")
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail="Usuario no encontrado"
-                )
+                logger.warning(f"⚠️ Usuario no encontrado en tabla users, creando registro: {token_data.sub}")
 
-            user_data = user_query.data[0]
+                # El usuario existe en Supabase Auth pero no en tabla users
+                # Crear registro en tabla users automáticamente
+                try:
+                    # Determinar rol por defecto basado en el email o asignar 'employee'
+                    default_role = "manager" if token_data.email and "@manager" in token_data.email else "employee"
+
+                    user_insert = admin_client.table("users").insert({
+                        "id": token_data.sub,
+                        "email": token_data.email,
+                        "role": default_role,
+                        "created_at": datetime.utcnow().isoformat(),
+                        "updated_at": datetime.utcnow().isoformat()
+                    }).execute()
+
+                    if user_insert.data:
+                        logger.info(f"✅ Usuario creado automáticamente en tabla users: {token_data.sub} con rol {default_role}")
+                        user_data = user_insert.data[0]
+                    else:
+                        raise Exception("No se pudo insertar usuario en tabla users")
+
+                except Exception as insert_error:
+                    logger.error(f"❌ Error al crear usuario en tabla users: {insert_error}")
+                    raise HTTPException(
+                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                        detail=f"Usuario existe en Auth pero no se pudo crear en tabla users. Contacte al administrador."
+                    )
+            else:
+                user_data = user_query.data[0]
 
             return UserResponse(
                 id=user_data["id"],

@@ -12,28 +12,55 @@ logger = logging.getLogger(__name__)
 
 class NotificationService:
     def __init__(self):
-        # Configuración SMTP desde variables de entorno
-        self.smtp_host = os.getenv('SMTP_HOST', 'smtp.gmail.com')
-        self.smtp_port = int(os.getenv('SMTP_PORT', '587'))
-        self.smtp_user = os.getenv('SMTP_USER')
-        # Limpiar espacios de la contraseña (las contraseñas de aplicación de Gmail a veces tienen espacios)
-        self.smtp_password = os.getenv('SMTP_PASSWORD').replace(' ', '') if os.getenv('SMTP_PASSWORD') else None
-        self.smtp_from_email = os.getenv('SMTP_FROM_EMAIL', self.smtp_user)
-        self.smtp_from_name = os.getenv('SMTP_FROM_NAME', 'Sistema PMIS')
-        self.use_tls = os.getenv('SMTP_USE_TLS', 'true').lower() == 'true'
+        self._smtp_initialized = False
+        self._load_smtp_config()
 
-        # Validar que las credenciales SMTP están configuradas
-        invalid_placeholders = ['tu-email@gmail.com', 'tu-password-de-aplicacion', 'your-email@example.com']
+    def _load_smtp_config(self):
+        """Cargar configuración SMTP desde settings"""
+        try:
+            from app.config import settings
 
-        if (not self.smtp_user or
-            not self.smtp_password or
-            self.smtp_user in invalid_placeholders or
-            self.smtp_password in invalid_placeholders):
-            logger.warning("SMTP not configured properly. Email notifications will be displayed in console.")
-            self.smtp_configured = False
-        else:
-            self.smtp_configured = True
-            logger.info(f"SMTP configured successfully for {self.smtp_user[:3]}***@***")
+            # Configuración SMTP desde settings
+            self.smtp_host = settings.SMTP_HOST or 'smtp.gmail.com'
+            self.smtp_port = settings.SMTP_PORT or 587
+            self.smtp_user = settings.SMTP_USER
+            # Limpiar espacios de la contraseña (las contraseñas de aplicación de Gmail a veces tienen espacios)
+            self.smtp_password = settings.SMTP_PASSWORD.replace(' ', '') if settings.SMTP_PASSWORD else None
+            self.smtp_from_email = os.getenv('SMTP_FROM_EMAIL', self.smtp_user)
+            self.smtp_from_name = os.getenv('SMTP_FROM_NAME', 'ProjeGest')
+            self.use_tls = os.getenv('SMTP_USE_TLS', 'true').lower() == 'true'
+
+            # Validar que las credenciales SMTP están configuradas
+            invalid_placeholders = ['tu-email@gmail.com', 'tu-password-de-aplicacion', 'your-email@example.com']
+
+            if (not self.smtp_user or
+                not self.smtp_password or
+                self.smtp_user in invalid_placeholders or
+                self.smtp_password in invalid_placeholders):
+                logger.warning("SMTP not configured properly. Email notifications will be displayed in console.")
+                self.smtp_configured = False
+            else:
+                self.smtp_configured = True
+                logger.info(f"SMTP configured successfully for {self.smtp_user[:3]}***@***")
+
+            self._smtp_initialized = True
+
+        except Exception as e:
+            logger.error(f"Error loading SMTP config: {e}")
+            # Fallback a variables de entorno directas
+            self.smtp_host = os.getenv('SMTP_HOST', 'smtp.gmail.com')
+            self.smtp_port = int(os.getenv('SMTP_PORT', '587'))
+            self.smtp_user = os.getenv('SMTP_USER')
+            self.smtp_password = os.getenv('SMTP_PASSWORD').replace(' ', '') if os.getenv('SMTP_PASSWORD') else None
+            self.smtp_from_email = os.getenv('SMTP_FROM_EMAIL', self.smtp_user)
+            self.smtp_from_name = os.getenv('SMTP_FROM_NAME', 'ProjeGest')
+            self.use_tls = os.getenv('SMTP_USE_TLS', 'true').lower() == 'true'
+            self.smtp_configured = bool(self.smtp_user and self.smtp_password)
+
+    def _ensure_smtp_config(self):
+        """Asegurar que la configuración SMTP está cargada"""
+        if not self._smtp_initialized:
+            self._load_smtp_config()
 
     def generate_temporary_password(self, length: int = 12) -> str:
         """
@@ -72,6 +99,12 @@ class NotificationService:
         """
         Enviar email usando configuración SMTP directa
         """
+        self._ensure_smtp_config()
+
+        if not self.smtp_configured:
+            logger.warning(f"SMTP not configured, would send email to {to_email}")
+            return False
+
         try:
             # Crear mensaje
             msg = MIMEMultipart('alternative')
