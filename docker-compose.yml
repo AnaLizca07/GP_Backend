@@ -1,0 +1,52 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    container_name: pmis_backend
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      - ENVIRONMENT=production
+    networks:
+      - pmis_network
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/auth/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+  # ── Desarrollo: recarga automática ─────────────────────────────────────────
+  backend-dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: builder          # usa el venv del builder
+    container_name: pmis_backend_dev
+    command: >
+      uvicorn app.main:app
+      --host 0.0.0.0
+      --port 8000
+      --reload
+    volumes:
+      - .:/app                 # monta el código local para hot-reload
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      - ENVIRONMENT=development
+    networks:
+      - pmis_network
+    profiles:
+      - dev                    # sólo se levanta con: docker compose --profile dev up
+
+networks:
+  pmis_network:
+    name: pmis_network
+    driver: bridge
