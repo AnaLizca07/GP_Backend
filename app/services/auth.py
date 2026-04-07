@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional, Dict, Any
 import logging
 from fastapi import HTTPException, status
@@ -17,12 +17,39 @@ from app.services.notifications import notification_service
 
 logger = logging.getLogger(__name__)
 
+# Simple in-memory token cache to avoid Supabase round-trips on every request
+_token_cache: Dict[str, tuple[TokenPayload, datetime]] = {}
+_TOKEN_CACHE_TTL = timedelta(minutes=5)
+
+
+def _get_cached_token(token: str) -> Optional[TokenPayload]:
+    entry = _token_cache.get(token)
+    if entry and datetime.utcnow() < entry[1]:
+        return entry[0]
+    if entry:
+        del _token_cache[token]
+    return None
+
+
+def _cache_token(token: str, payload: TokenPayload) -> None:
+    _token_cache[token] = (payload, datetime.utcnow() + _TOKEN_CACHE_TTL)
+    # Evict old entries if cache grows too large
+    if len(_token_cache) > 500:
+        oldest = sorted(_token_cache.items(), key=lambda x: x[1][1])[:100]
+        for k, _ in oldest:
+            del _token_cache[k]
+
+
 class AuthService:
     def __init__(self):
         pass
 
     def verify_supabase_token(self, token: str) -> TokenPayload:
-        """Verificar token usando Supabase Auth"""
+        """Verificar token usando Supabase Auth (con caché local de 5 min)"""
+        cached = _get_cached_token(token)
+        if cached:
+            return cached
+
         try:
             # Usar Supabase para obtener el usuario del token
             user_response = supabase.auth.get_user(token)
@@ -41,7 +68,15 @@ class AuthService:
             user_query = supabase.table("users").select("role").eq("id", user_id).execute()
             role = user_query.data[0]["role"] if user_query.data else None
 
-            return TokenPayload(sub=user_id, email=email, role=role)
+            # Leer must_change_password desde user_metadata de Supabase Auth
+            user_metadata = user_response.user.user_metadata or {}
+            must_change = bool(user_metadata.get("must_change_password", False))
+
+            payload = TokenPayload(sub=user_id, email=email, role=role, must_change_password=must_change)
+            _cache_token(token, payload)
+            return payload
+        except HTTPException:
+            raise
         except Exception as e:
             logger.error(f"Error al verificar token: {e}")
             raise HTTPException(
@@ -136,8 +171,10 @@ class AuthService:
                 logger.info("🔑 Usando token de sesión normal")
             else:
                 # Para método administrativo, hacer login automático para generar token
+                # IMPORTANTE: usar el cliente anon (supabase), no el admin singleton,
+                # para evitar contaminar la sesión del cliente con service_role_key.
                 try:
-                    login_response = admin_supabase.auth.sign_in_with_password({
+                    login_response = supabase.auth.sign_in_with_password({
                         "email": user_data.email,
                         "password": user_data.password
                     })
@@ -197,13 +234,17 @@ class AuthService:
             user_data = user_query.data[0]
 
             # 3. Crear respuesta usando el token de Supabase
+            # Leer must_change_password desde user_metadata de Supabase Auth
+            user_meta = auth_response.user.user_metadata or {}
+            must_change = bool(user_meta.get("must_change_password", False))
+
             user_response = UserResponse(
                 id=user_data["id"],
                 email=user_data["email"],
                 role=UserRole(user_data["role"]),
                 created_at=datetime.fromisoformat(user_data["created_at"].replace('Z', '+00:00')),
                 updated_at=datetime.fromisoformat(user_data["updated_at"].replace('Z', '+00:00')) if user_data["updated_at"] else None,
-# must_change_password=user_data.get("must_change_password", False)  # Columna no existe temporalmente
+                must_change_password=must_change,
             )
 
             # 4. Registrar login en audit_logs
@@ -248,18 +289,20 @@ class AuthService:
             from app.database import get_admin_supabase
             admin_client = get_admin_supabase()
 
-            logger.info(f"🔍 DEBUG: Buscando usuario con ID: {token_data.sub}")
             user_query = admin_client.table("users").select("*").eq("id", token_data.sub).execute()
-            logger.info(f"🔍 DEBUG: Resultado de búsqueda: {user_query.data}")
 
             if not user_query.data:
-                logger.warning(f"⚠️ Usuario no encontrado en tabla users, creando registro: {token_data.sub}")
-
                 # El usuario existe en Supabase Auth pero no en tabla users
                 # Crear registro en tabla users automáticamente
                 try:
-                    # Determinar rol por defecto basado en el email o asignar 'employee'
-                    default_role = "manager" if token_data.email and "@manager" in token_data.email else "employee"
+                    default_role = "sponsor"
+
+                    # Si el email contiene indicadores, ajustar el rol
+                    if token_data.email:
+                        if "@manager" in token_data.email.lower() or "admin" in token_data.email.lower():
+                            default_role = "manager"
+                        elif "employee" in token_data.email.lower():
+                            default_role = "employee"
 
                     user_insert = admin_client.table("users").insert({
                         "id": token_data.sub,
@@ -270,16 +313,24 @@ class AuthService:
                     }).execute()
 
                     if user_insert.data:
-                        logger.info(f"✅ Usuario creado automáticamente en tabla users: {token_data.sub} con rol {default_role}")
                         user_data = user_insert.data[0]
                     else:
                         raise Exception("No se pudo insertar usuario en tabla users")
 
                 except Exception as insert_error:
-                    logger.error(f"❌ Error al crear usuario en tabla users: {insert_error}")
+                    logger.error(f"Error al crear usuario en tabla users: {insert_error}")
+
+                    # Verificar si es un error de permisos
+                    if "permission" in str(insert_error).lower() or "forbidden" in str(insert_error).lower():
+                        detail_msg = "Error de permisos al crear usuario en tabla. Verifique configuración de Supabase."
+                    elif "duplicate key" in str(insert_error).lower():
+                        detail_msg = "Usuario ya existe en tabla pero no se pudo recuperar."
+                    else:
+                        detail_msg = f"Error al sincronizar usuario: {str(insert_error)}"
+
                     raise HTTPException(
                         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                        detail=f"Usuario existe en Auth pero no se pudo crear en tabla users. Contacte al administrador."
+                        detail=detail_msg
                     )
             else:
                 user_data = user_query.data[0]
@@ -290,7 +341,7 @@ class AuthService:
                 role=UserRole(user_data["role"]),
                 created_at=datetime.fromisoformat(user_data["created_at"].replace('Z', '+00:00')),
                 updated_at=datetime.fromisoformat(user_data["updated_at"].replace('Z', '+00:00')) if user_data["updated_at"] else None,
-# must_change_password=user_data.get("must_change_password", False)  # Columna no existe temporalmente
+                must_change_password=token_data.must_change_password,
             )
         except HTTPException:
             raise
@@ -335,11 +386,17 @@ class AuthService:
                     }
                 )
 
-            # 2. Actualizar contraseña en Supabase Auth
-            # Nota: Esto requiere que el usuario esté autenticado
-            user_update_response = supabase.auth.update_user({
-                "password": new_password
-            })
+            # 2. Actualizar contraseña Y limpiar must_change_password via admin client
+            from app.database import get_admin_supabase
+            admin_client = get_admin_supabase()
+
+            user_update_response = admin_client.auth.admin.update_user_by_id(
+                current_user.id,
+                {
+                    "password": new_password,
+                    "user_metadata": {"must_change_password": False},
+                }
+            )
 
             if not user_update_response.user:
                 raise HTTPException(
@@ -347,23 +404,25 @@ class AuthService:
                     detail="Error al actualizar contraseña en Supabase Auth"
                 )
 
-            # 3. Marcar como completado el cambio de contraseña obligatorio
-            supabase.table("users").update({
-                # "must_change_password": False,  # Columna no existe temporalmente
+            # 3. Actualizar timestamp en tabla users
+            admin_client.table("users").update({
                 "updated_at": datetime.utcnow().isoformat()
             }).eq("id", current_user.id).execute()
 
-            # 4. Log de auditoría
+            # 4. Invalidar caché del token para este usuario (flag ya no aplica)
+            for token_key in list(_token_cache.keys()):
+                if _token_cache[token_key][0].sub == current_user.id:
+                    del _token_cache[token_key]
+
+            # 5. Log de auditoría
             try:
-                supabase.table("audit_logs").insert({
+                admin_client.table("audit_logs").insert({
                     "user_id": current_user.id,
                     "action": "PASSWORD_CHANGE",
                     "table_name": "users",
                     "record_id": None,
-                    # "old_data": {"must_change_password": current_user.must_change_password},  # Columna no existe temporalmente
-                    # "new_data": {"must_change_password": False, "password_changed": True},  # Columna no existe temporalmente
-                    "old_data": {"password_change_requested": True},
-                    "new_data": {"password_changed": True},
+                    "old_data": {"must_change_password": True},
+                    "new_data": {"must_change_password": False, "password_changed": True},
                     "created_at": datetime.utcnow().isoformat()
                 }).execute()
             except Exception as audit_error:
@@ -374,7 +433,7 @@ class AuthService:
             return {
                 "message": "Contraseña actualizada exitosamente",
                 "password_strength": password_validation['strength'],
-                # "must_change_password": False  # Columna no existe temporalmente
+                "must_change_password": False,
             }
 
         except HTTPException:

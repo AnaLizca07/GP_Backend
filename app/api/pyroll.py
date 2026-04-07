@@ -1,6 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Query
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from typing import Annotated, Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any
 from datetime import date, datetime
 
 from app.models.payroll import (
@@ -19,26 +18,14 @@ from app.models.payroll import (
 from app.services.payroll_db import payroll_db_service
 from app.models.auth import UserResponse
 from app.services.payroll import payroll_service
+from app.database import get_admin_supabase
 from app.services.employees import employee_service
-from app.services.auth import auth_service
+from app.services.payroll_receipt import process_payroll_receipt
+from app.services.notifications import notification_service
+
+from app.api.deps import get_current_user, require_manager
 
 router = APIRouter(prefix="/payroll", tags=["payroll"])
-security = HTTPBearer()
-
-async def get_current_user(
-    credentials: Annotated[HTTPAuthorizationCredentials, Depends(security)]
-) -> UserResponse:
-    """Dependency para obtener usuario actual"""
-    return await auth_service.get_current_user(credentials.credentials)
-
-async def require_manager(current_user: UserResponse = Depends(get_current_user)):
-    """Dependency que requiere rol de manager"""
-    if current_user.role != "manager":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Solo los gerentes pueden acceder a esta funcionalidad"
-        )
-    return current_user
 
 @router.post("/calculate", response_model=PayrollCalculationResult)
 async def calculate_payroll(
@@ -486,8 +473,35 @@ async def process_payroll_payment(
         # Obtener registro completo con datos del empleado
         payroll_response = await payroll_db_service.get_payroll_by_id(payroll_record.id)
 
-        # TODO: Enviar notificación por correo al empleado
-        # await notification_service.send_payroll_notification(calculation, payroll_record)
+        # RF24: Notificar al empleado que su nómina fue procesada
+        try:
+            emp_user_res = (
+                get_admin_supabase().table("employees")
+                .select("name, user_id")
+                .eq("id", calculation_request.employee_id)
+                .single()
+                .execute()
+            )
+            if emp_user_res.data:
+                user_res = (
+                    get_admin_supabase().table("users")
+                    .select("email")
+                    .eq("id", emp_user_res.data["user_id"])
+                    .single()
+                    .execute()
+                )
+                if user_res.data and user_res.data.get("email"):
+                    await notification_service.send_payroll_processed_notification(
+                        employee_email=user_res.data["email"],
+                        employee_name=emp_user_res.data["name"],
+                        period_start=str(calculation_request.period_start),
+                        period_end=str(calculation_request.period_end),
+                        net_pay=float(calculation.net_salary),
+                        receipt_url=payroll_response.receipt_url or "",
+                    )
+        except Exception as notify_err:
+            import logging
+            logging.getLogger(__name__).warning(f"No se pudo enviar notificación de nómina: {notify_err}")
 
         return payroll_response
 
@@ -787,25 +801,54 @@ async def mark_payroll_as_paid_endpoint(
     current_user: UserResponse = Depends(require_manager)
 ):
     """
-    Marcar registro de nómina como pagado
+    Marcar registro de nómina como pagado.
 
-    Actualiza el estado a 'paid' y opcionalmente agrega URL del comprobante.
+    Al marcar como pagado:
+    1. Obtiene el registro completo de nómina
+    2. Genera un PDF comprobante de pago
+    3. Lo sube a Supabase Storage
+    4. Envía el comprobante por email al empleado
+    5. Guarda la URL del comprobante en el registro
 
     Acceso: Solo gerentes
     """
     try:
-        success = await payroll_service.mark_payroll_as_paid(payroll_id, receipt_url)
-
-        if not success:
+        # Obtener el registro completo para tener todos los datos del PDF
+        record = await payroll_db_service.get_payroll_by_id(payroll_id)
+        if not record:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Registro de nómina no encontrado"
             )
 
+        # Generar comprobante PDF, subirlo y enviar email
+        generated_url = await process_payroll_receipt(
+            payroll_id=payroll_id,
+            employee_id=record.employee_id,
+            employee_name=record.employee_name,
+            period_start=record.period_start.strftime("%d/%m/%Y"),
+            period_end=record.period_end.strftime("%d/%m/%Y"),
+            base_salary=float(record.base_salary),
+            deductions=record.deductions or {},
+            employer_contributions=record.employer_contributions or {},
+            benefits=record.benefits or {},
+            net_pay=float(record.net_pay),
+        )
+
+        final_url = receipt_url or generated_url
+
+        success = await payroll_service.mark_payroll_as_paid(payroll_id, final_url)
+
+        if not success:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="No se pudo actualizar el registro de nómina"
+            )
+
         return {
             "message": "Registro marcado como pagado exitosamente",
             "payroll_id": payroll_id,
-            "receipt_url": receipt_url
+            "receipt_url": final_url
         }
 
     except HTTPException:
@@ -941,4 +984,61 @@ async def delete_payroll_record(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error eliminando registro de nómina: {str(e)}"
+        )
+
+@router.get("/employee/{employee_id}/receipts")
+async def get_employee_payment_receipts(
+    employee_id: int,
+    current_user: UserResponse = Depends(get_current_user)
+):
+    """
+    Obtener comprobantes de pago de un empleado
+
+    Retorna todos los registros de nómina en estado 'paid' con su comprobante PDF.
+
+    Acceso:
+    - Gerentes: cualquier empleado
+    - Patrocinadores: solo empleados de sus proyectos
+    """
+    if current_user.role not in ("manager", "sponsor"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Sin acceso a esta información"
+        )
+
+    # Patrocinadores: verificar que el empleado esté en uno de sus proyectos
+    if current_user.role == "sponsor":
+        sb = get_admin_supabase()
+        emp_proj = (
+            sb.table("project_employees")
+            .select("project_id, projects(sponsor_id)")
+            .eq("employee_id", employee_id)
+            .execute()
+        )
+        sponsor_projects = [
+            r for r in (emp_proj.data or [])
+            if (r.get("projects") or {}).get("sponsor_id") == current_user.id
+        ]
+        if not sponsor_projects:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Solo puedes ver empleados de tus proyectos"
+            )
+
+    try:
+        sb = get_admin_supabase()
+        result = (
+            sb.table("payroll")
+            .select("id, period_start, period_end, net_pay, receipt_url, paid_at, status")
+            .eq("employee_id", employee_id)
+            .eq("status", "paid")
+            .order("paid_at", desc=True)
+            .execute()
+        )
+        return result.data or []
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error obteniendo comprobantes: {str(e)}"
         )

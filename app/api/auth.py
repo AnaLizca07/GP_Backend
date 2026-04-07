@@ -1,6 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, status
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from typing import Annotated
+from typing import List
 
 from app.models.auth import (
     UserRegister,
@@ -11,15 +10,11 @@ from app.models.auth import (
     PasswordUpdate,
     ErrorResponse
 )
+
+from app.api.deps import get_current_user
 from app.services.auth import auth_service
 
 router = APIRouter()
-security = HTTPBearer()
-
-async def get_current_user(
-    credentials: Annotated[HTTPAuthorizationCredentials, Depends(security)]
-) -> UserResponse:
-    return await auth_service.get_current_user(credentials.credentials)
 
 @router.post("/register", response_model=AuthResponse, status_code=status.HTTP_201_CREATED)
 async def register(user_data: UserRegister):
@@ -89,6 +84,21 @@ async def validate_sponsor_role(current_user: UserResponse = Depends(get_current
             detail="Acceso denegado: Se requiere rol de sponsor"
         )
     return {"message": "Acceso autorizado", "role": "sponsor", "user_id": current_user.id}
+
+@router.get("/sponsors", response_model=List[dict])
+async def get_sponsors(current_user: UserResponse = Depends(get_current_user)):
+    """
+    Listar todos los usuarios con rol 'sponsor'.
+    Acceso: Solo managers (para asignar sponsor a un proyecto).
+    """
+    if current_user.role != "manager":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Solo los gerentes pueden consultar la lista de patrocinadores"
+        )
+    from app.database import get_admin_supabase
+    result = get_admin_supabase().table("users").select("id, email").eq("role", "sponsor").execute()
+    return result.data or []
 
 @router.get("/rate-limit-status")
 async def get_rate_limit_status():
