@@ -5,7 +5,9 @@ import smtplib
 import os
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-from typing import Optional, Dict, Any
+from email.mime.base import MIMEBase
+from email import encoders
+from typing import Optional, Dict, Any, List, Tuple
 from fastapi import HTTPException
 
 logger = logging.getLogger(__name__)
@@ -416,6 +418,271 @@ class NotificationService:
 
         except Exception as e:
             logger.error(f"Error sending notification: {e}")
+            return False
+
+    async def send_task_assignment_notification(
+        self,
+        employee_email: str,
+        employee_name: str,
+        task_title: str,
+        task_description: str,
+        due_date: str,
+        priority: str,
+        project_name: str = "",
+    ) -> bool:
+        """Notificar al empleado que le fue asignada una tarea (RF24)"""
+        priority_labels = {"low": "Baja", "medium": "Media", "high": "Alta", "urgent": "Urgente"}
+        priority_label = priority_labels.get(priority, priority)
+        try:
+            html_content = f"""
+            <!DOCTYPE html><html><head><meta charset="utf-8">
+            <style>
+                body{{font-family:Arial,sans-serif;color:#333;margin:0;padding:20px;}}
+                .container{{max-width:600px;margin:0 auto;background:#fff;}}
+                .header{{background:#2563eb;color:white;padding:28px 24px;text-align:center;}}
+                .content{{padding:28px 24px;background:#f8f9fa;}}
+                .card{{background:white;padding:20px;border-left:4px solid #2563eb;border-radius:6px;margin:16px 0;}}
+                .footer{{background:#1f2937;color:#9ca3af;padding:20px;text-align:center;font-size:13px;}}
+            </style></head><body>
+            <div class="container">
+                <div class="header"><h2>📋 ProjeGest — PMIS</h2><p>Nueva tarea asignada</p></div>
+                <div class="content">
+                    <p>Hola <strong>{employee_name}</strong>,</p>
+                    <p>Se te ha asignado una nueva tarea en el sistema:</p>
+                    <div class="card">
+                        <h3 style="margin:0 0 8px">{task_title}</h3>
+                        {"<p>" + task_description + "</p>" if task_description else ""}
+                        <p><strong>Proyecto:</strong> {project_name or "—"}</p>
+                        <p><strong>Fecha límite:</strong> {due_date or "Sin fecha"}</p>
+                        <p><strong>Prioridad:</strong> {priority_label}</p>
+                    </div>
+                    <p>Ingresa al sistema para ver los detalles.</p>
+                </div>
+                <div class="footer"><p>Mensaje automático — Sistema PMIS · No respondas este correo</p></div>
+            </div></body></html>"""
+            text_content = (
+                f"ProjeGest PMIS\n\nHola {employee_name},\n\n"
+                f"Se te asignó la tarea: {task_title}\n"
+                f"Proyecto: {project_name or '—'}\nFecha límite: {due_date or 'Sin fecha'}\n"
+                f"Prioridad: {priority_label}\n\nIngresa al sistema para más detalles."
+            )
+            return self._send_smtp_email(
+                to_email=employee_email,
+                subject=f"📋 Nueva tarea — {task_title} · PMIS",
+                html_content=html_content,
+                text_content=text_content,
+            )
+        except Exception as e:
+            logger.error(f"Error enviando notificación de tarea: {e}")
+            return False
+
+    async def send_payroll_processed_notification(
+        self,
+        employee_email: str,
+        employee_name: str,
+        period_start: str,
+        period_end: str,
+        net_pay: float,
+        receipt_url: str = "",
+    ) -> bool:
+        """Notificar al empleado que su nómina fue procesada (RF24)"""
+        net_pay_fmt = f"${net_pay:,.0f} COP".replace(",", ".")
+        try:
+            receipt_link = (
+                f'<p><a href="{receipt_url}" style="color:#0f766e">Ver comprobante de pago →</a></p>'
+                if receipt_url else ""
+            )
+            html_content = f"""
+            <!DOCTYPE html><html><head><meta charset="utf-8">
+            <style>
+                body{{font-family:Arial,sans-serif;color:#333;margin:0;padding:20px;}}
+                .container{{max-width:600px;margin:0 auto;background:#fff;}}
+                .header{{background:#0f766e;color:white;padding:28px 24px;text-align:center;}}
+                .content{{padding:28px 24px;background:#f8f9fa;}}
+                .card{{background:white;padding:20px;border-left:4px solid #0f766e;border-radius:6px;margin:16px 0;}}
+                .amount{{font-size:2rem;font-weight:700;color:#0f766e;}}
+                .footer{{background:#1f2937;color:#9ca3af;padding:20px;text-align:center;font-size:13px;}}
+            </style></head><body>
+            <div class="container">
+                <div class="header"><h2>💰 ProjeGest — PMIS</h2><p>Comprobante de nómina</p></div>
+                <div class="content">
+                    <p>Hola <strong>{employee_name}</strong>,</p>
+                    <p>Tu pago de nómina ha sido procesado:</p>
+                    <div class="card">
+                        <p><strong>Período:</strong> {period_start} al {period_end}</p>
+                        <p>Neto a recibir:</p>
+                        <p class="amount">{net_pay_fmt}</p>
+                        {receipt_link}
+                    </div>
+                </div>
+                <div class="footer"><p>Mensaje automático — Sistema PMIS · No respondas este correo</p></div>
+            </div></body></html>"""
+            text_content = (
+                f"ProjeGest PMIS\n\nHola {employee_name},\n\n"
+                f"Tu nómina del período {period_start} al {period_end} fue procesada.\n"
+                f"Neto a recibir: {net_pay_fmt}\n"
+                + (f"Comprobante: {receipt_url}\n" if receipt_url else "")
+            )
+            return self._send_smtp_email(
+                to_email=employee_email,
+                subject=f"💰 Nómina procesada — {period_start} · PMIS",
+                html_content=html_content,
+                text_content=text_content,
+            )
+        except Exception as e:
+            logger.error(f"Error enviando notificación de nómina: {e}")
+            return False
+
+    async def send_cv_upload_notification(
+        self,
+        manager_email: str,
+        manager_name: str,
+        employee_name: str,
+        employee_id: int,
+    ) -> bool:
+        """
+        Notificar al gerente que un empleado subió su hoja de vida (RF05)
+        """
+        try:
+            subject = f"Nueva hoja de vida — {employee_name}"
+            html_content = f"""
+            <!DOCTYPE html><html><head><meta charset="utf-8">
+            <style>
+                body{{font-family:Arial,sans-serif;color:#333;margin:0;padding:20px;}}
+                .container{{max-width:600px;margin:0 auto;background:#fff;}}
+                .header{{background:#0f766e;color:white;padding:28px 24px;text-align:center;}}
+                .content{{padding:28px 24px;background:#f8f9fa;}}
+                .card{{background:white;padding:20px;border-left:4px solid #0f766e;border-radius:6px;margin:16px 0;}}
+                .footer{{background:#1f2937;color:#9ca3af;padding:20px;text-align:center;font-size:13px;}}
+            </style></head><body>
+            <div class="container">
+                <div class="header"><h2>📄 ProjeGest — PMIS</h2><p>Notificación de hoja de vida</p></div>
+                <div class="content">
+                    <p>Hola <strong>{manager_name}</strong>,</p>
+                    <div class="card">
+                        <p>El empleado <strong>{employee_name}</strong> ha actualizado su hoja de vida en el sistema.</p>
+                        <p>Puedes revisarla accediendo al perfil del empleado (ID #{employee_id}) en el módulo <strong>Equipo</strong>.</p>
+                    </div>
+                </div>
+                <div class="footer"><p>Mensaje automático — Sistema PMIS · No respondas este correo</p></div>
+            </div></body></html>"""
+
+            text_content = (
+                f"ProjeGest PMIS\n\nHola {manager_name},\n\n"
+                f"El empleado {employee_name} (ID #{employee_id}) ha actualizado su hoja de vida.\n"
+                "Revísala en el módulo Equipo del sistema.\n\n"
+                "--- Mensaje automático, no respondas este correo ---"
+            )
+
+            return self._send_smtp_email(
+                to_email=manager_email,
+                subject=f"📄 Nueva hoja de vida — {employee_name} · PMIS",
+                html_content=html_content,
+                text_content=text_content,
+            )
+        except Exception as e:
+            logger.error(f"Error enviando notificación de CV: {e}")
+            return False
+
+    def _send_smtp_email_with_attachment(
+        self,
+        to_email: str,
+        subject: str,
+        html_content: str,
+        text_content: str,
+        attachments: List[Tuple[str, bytes, str]],  # (filename, data, mimetype)
+    ) -> bool:
+        """Enviar email con archivos adjuntos usando SMTP."""
+        self._ensure_smtp_config()
+        if not self.smtp_configured:
+            logger.warning(f"SMTP not configured, would send email with attachment to {to_email}")
+            return False
+        try:
+            msg = MIMEMultipart('mixed')
+            msg['Subject'] = subject
+            msg['From'] = f"{self.smtp_from_name} <{self.smtp_from_email}>"
+            msg['To'] = to_email
+
+            # Body (alternative: text + html)
+            body = MIMEMultipart('alternative')
+            body.attach(MIMEText(text_content, 'plain', 'utf-8'))
+            body.attach(MIMEText(html_content, 'html', 'utf-8'))
+            msg.attach(body)
+
+            # Attachments
+            for filename, data, mimetype in attachments:
+                part = MIMEBase(*mimetype.split('/'))
+                part.set_payload(data)
+                encoders.encode_base64(part)
+                part.add_header('Content-Disposition', 'attachment', filename=filename)
+                msg.attach(part)
+
+            with smtplib.SMTP(self.smtp_host, self.smtp_port) as server:
+                if self.use_tls:
+                    server.starttls()
+                if self.smtp_user and self.smtp_password:
+                    server.login(self.smtp_user, self.smtp_password)
+                server.send_message(msg)
+
+            logger.info(f"Email with attachment sent to {to_email}")
+            return True
+        except Exception as e:
+            logger.error(f"Error sending email with attachment: {e}")
+            return False
+
+    async def send_employee_report_email(
+        self,
+        employee_email: str,
+        employee_name: str,
+        pdf_bytes: bytes,
+        employee_id: int,
+    ) -> bool:
+        """
+        Enviar informe de desempeño PDF al empleado/gerente por correo (RF16).
+        """
+        from datetime import date
+        report_date = date.today().strftime('%d/%m/%Y')
+        filename = f"informe_desempeno_{employee_id}_{date.today().isoformat()}.pdf"
+        try:
+            html_content = f"""
+            <!DOCTYPE html><html><head><meta charset="utf-8">
+            <style>
+                body{{font-family:Arial,sans-serif;color:#333;margin:0;padding:20px;}}
+                .container{{max-width:600px;margin:0 auto;background:#fff;}}
+                .header{{background:#003C68;color:white;padding:28px 24px;text-align:center;}}
+                .content{{padding:28px 24px;background:#f8f9fa;}}
+                .card{{background:white;padding:20px;border-left:4px solid #003C68;border-radius:6px;margin:16px 0;}}
+                .footer{{background:#1f2937;color:#9ca3af;padding:20px;text-align:center;font-size:13px;}}
+            </style></head><body>
+            <div class="container">
+                <div class="header"><h2>📊 ProjeGest — PMIS</h2><p>Informe de Desempeño</p></div>
+                <div class="content">
+                    <p>Estimado/a <strong>{employee_name}</strong>,</p>
+                    <div class="card">
+                        <p>Adjunto encontrarás tu <strong>informe de desempeño</strong> generado el <strong>{report_date}</strong>.</p>
+                        <p>El documento incluye métricas de tareas completadas, proyectos asignados y tasa de cumplimiento.</p>
+                    </div>
+                    <p>Si tienes preguntas sobre tu informe, contáctate con tu gerente.</p>
+                </div>
+                <div class="footer"><p>Mensaje automático — Sistema PMIS · No respondas este correo</p></div>
+            </div></body></html>"""
+            text_content = (
+                f"ProjeGest PMIS — Informe de Desempeño\n\n"
+                f"Estimado/a {employee_name},\n\n"
+                f"Adjunto encontrarás tu informe de desempeño generado el {report_date}.\n"
+                "El documento incluye métricas de tareas completadas, proyectos asignados y tasa de cumplimiento.\n\n"
+                "Si tienes preguntas, contáctate con tu gerente.\n\n"
+                "--- Mensaje automático, no respondas este correo ---"
+            )
+            return self._send_smtp_email_with_attachment(
+                to_email=employee_email,
+                subject=f"📊 Informe de desempeño — {employee_name} · {report_date}",
+                html_content=html_content,
+                text_content=text_content,
+                attachments=[(filename, pdf_bytes, "application/pdf")],
+            )
+        except Exception as e:
+            logger.error(f"Error enviando informe por email: {e}")
             return False
 
     def validate_password_strength(self, password: str) -> dict:

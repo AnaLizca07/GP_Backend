@@ -3,7 +3,7 @@ from typing import Optional, List, Dict, Any
 import logging
 from uuid import UUID
 
-from app.database import supabase
+from app.database import supabase, get_admin_supabase
 from app.models.payroll import (
     PayrollRecord,
     PayrollRecordResponse,
@@ -18,7 +18,7 @@ class PayrollDatabaseService:
     """Servicio para operaciones de base de datos de nómina"""
 
     def __init__(self):
-        self.db = supabase
+        self.db = get_admin_supabase()
 
     async def save_payroll_record(
         self,

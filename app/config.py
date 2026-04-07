@@ -5,6 +5,7 @@ class Settings(BaseSettings):
     # Supabase
     SUPABASE_URL: str = ""
     SUPABASE_KEY: str = ""
+    SUPABASE_SERVICE_ROLE_KEY: str = ""
 
     # JWT / Auth
     SECRET_KEY: str = "secret-key"
@@ -13,6 +14,15 @@ class Settings(BaseSettings):
 
     # Frontend
     FRONTEND_URL: str = "http://localhost:5173"
+
+    # SMTP Configuration
+    SMTP_HOST: str = "smtp.gmail.com"
+    SMTP_PORT: int = 587
+    SMTP_USER: str = ""
+    SMTP_PASSWORD: str = ""
+    SMTP_FROM_EMAIL: str = ""
+    SMTP_FROM_NAME: str = "PMIS Sistema"
+    SMTP_USE_TLS: bool = True
 
     # Pydantic v2 settings
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")

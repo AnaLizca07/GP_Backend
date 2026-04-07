@@ -108,11 +108,11 @@ class StorageService:
                 detail="Solo se permiten archivos PDF"
             )
 
-        # Validar tamaño (máximo 10MB)
-        if file.size and file.size > 10 * 1024 * 1024:  # 10MB
+        # Validar tamaño (máximo 5MB — RF05)
+        if file.size and file.size > 5 * 1024 * 1024:  # 5MB
             raise HTTPException(
                 status_code=400,
-                detail="El archivo no puede exceder 10MB"
+                detail="El archivo no puede exceder 5MB"
             )
 
         # Validar tipo MIME

@@ -1,6 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile, File
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from typing import Annotated, Optional
+from typing import Optional
 
 from app.models.auth import (
     EmployeeCreate,
@@ -12,17 +11,13 @@ from app.models.auth import (
     ErrorResponse
 )
 from app.services.employees import employee_service
-from app.services.auth import auth_service
 from app.services.storage import get_storage_service
+from app.services.notifications import notification_service
+from app.database import get_admin_supabase
+
+from app.api.deps import get_current_user
 
 router = APIRouter(prefix="/employees", tags=["employees"])
-security = HTTPBearer()
-
-async def get_current_user(
-    credentials: Annotated[HTTPAuthorizationCredentials, Depends(security)]
-) -> UserResponse:
-    """Dependency para obtener usuario actual"""
-    return await auth_service.get_current_user(credentials.credentials)
 
 @router.post("/", response_model=EmployeeResponse, status_code=status.HTTP_201_CREATED)
 async def create_employee_complete(
@@ -96,6 +91,25 @@ async def get_employees(
     """
     return await employee_service.get_employees(current_user, page, limit, status_filter)
 
+@router.get("/me/profile", response_model=EmployeeResponse)
+async def get_my_employee_profile(
+    current_user: UserResponse = Depends(get_current_user)
+):
+    """
+    Obtener mi perfil de empleado
+
+    Acceso: Solo empleados
+
+    Uso: Endpoint conveniente para que los empleados obtengan su propio perfil
+    """
+    if current_user.role != "employee":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Este endpoint es solo para empleados"
+        )
+
+    return await employee_service.get_employee_by_user_id(current_user.id, current_user)
+
 @router.get("/{employee_id}", response_model=EmployeeResponse)
 async def get_employee(
     employee_id: int,
@@ -163,25 +177,6 @@ async def get_employee_by_user_id(
     """
     return await employee_service.get_employee_by_user_id(user_id, current_user)
 
-@router.get("/me/profile", response_model=EmployeeResponse)
-async def get_my_employee_profile(
-    current_user: UserResponse = Depends(get_current_user)
-):
-    """
-    Obtener mi perfil de empleado
-
-    Acceso: Solo empleados
-
-    Uso: Endpoint conveniente para que los empleados obtengan su propio perfil
-    """
-    if current_user.role != "employee":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Este endpoint es solo para empleados"
-        )
-
-    return await employee_service.get_employee_by_user_id(current_user.id, current_user)
-
 @router.post("/{employee_id}/resume", status_code=status.HTTP_200_OK)
 async def upload_resume(
     employee_id: int,
@@ -228,6 +223,22 @@ async def upload_resume(
             update_data,
             current_user
         )
+
+        # RF05: Notificar a los gerentes sobre la nueva hoja de vida (en background)
+        try:
+            sb = get_admin_supabase()
+            managers_res = sb.table("users").select("id, email").eq("role", "manager").execute()
+            for mgr in (managers_res.data or []):
+                if mgr.get("email"):
+                    await notification_service.send_cv_upload_notification(
+                        manager_email=mgr["email"],
+                        manager_name="Gerente",
+                        employee_name=updated_employee.name,
+                        employee_id=employee_id,
+                    )
+        except Exception as notify_err:
+            import logging
+            logging.getLogger(__name__).warning(f"No se pudo enviar notificación de CV: {notify_err}")
 
         return {
             "message": "Hoja de vida subida exitosamente",
