@@ -12,10 +12,11 @@ services:
       - .env
     environment:
       - ENVIRONMENT=production
+      - FRONTEND_URL=http://localhost:3000
     networks:
       - pmis_network
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/auth/health')"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/')"]
       interval: 30s
       timeout: 10s
       retries: 3

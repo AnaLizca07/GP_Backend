@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.api import auth, employees, pyroll, projects, tasks, finance, kpis, reports, okrs, ratings
+from app.config import settings
 
 
 async def ensure_storage_buckets():
@@ -46,10 +47,11 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# Configurar CORS
+# Configurar CORS — orígenes leídos desde FRONTEND_URL (puede ser CSV para múltiples)
+_cors_origins = [o.strip() for o in settings.FRONTEND_URL.split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    allow_origins=_cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
