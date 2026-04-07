@@ -4,7 +4,7 @@ class Settings(BaseSettings):
     # Supabase
     SUPABASE_URL: str = ""
     SUPABASE_KEY: str = ""
-    SUPABASE_SERVICE_ROLE_KEY: str = ""   # 👈 AGREGA ESTA LÍNEA
+    SUPABASE_SERVICE_ROLE_KEY: str = ""
 
     # JWT / Auth
     SECRET_KEY: str = "secret-key"

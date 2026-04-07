@@ -50,6 +50,7 @@ class TokenPayload(BaseModel):
     email: Optional[str] = None
     role: Optional[str] = None
     exp: Optional[datetime] = None
+    must_change_password: Optional[bool] = False
 
 # Modelos para empleados
 class EmployeeCreateComplete(BaseModel):
@@ -70,13 +71,13 @@ class EmployeeCreateComplete(BaseModel):
     resume_url: Optional[str] = None
     status: Literal["active", "inactive"] = "active"
 
-    #@validator('email')
-    #def validate_institutional_email(cls, v):
-     #   """Validar que sea email institucional (RF02)"""
-      #  allowed_domains = ['.cue.edu.co', '.unihumboldt.edu.co']
-       # if not any(v.endswith(domain) for domain in allowed_domains):
-        #    raise ValueError('El correo debe ser institucional (.cue.edu.co o .unihumboldt.edu.co)')
-        #return v
+    @validator('email')
+    def validate_institutional_email(cls, v):
+        """Validar que sea email institucional (RF02)"""
+        allowed_domains = ['.cue.edu.co', '.unihumboldt.edu.co']
+        if not any(v.endswith(domain) for domain in allowed_domains):
+            raise ValueError('El correo debe ser institucional (.cue.edu.co o .unihumboldt.edu.co)')
+        return v
 
 class EmployeeCreate(BaseModel):
     """Modelo para crear solo perfil de empleado (cuando ya existe el usuario)"""

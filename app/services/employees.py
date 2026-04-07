@@ -51,11 +51,11 @@ class EmployeeService:
                 auth_response = admin_supabase.auth.admin.create_user({
                     "email": employee_data.email,
                     "password": temporary_password,
-                    "email_confirm": True,  # Confirmar email automáticamente
+                    "email_confirm": True,
                     "user_metadata": {
                         "role": "employee",
-                        "created_by": "manager"
-                        # "must_change_password": True  # Columna no existe temporalmente
+                        "created_by": "manager",
+                        "must_change_password": True
                     }
                 })
 
@@ -68,12 +68,8 @@ class EmployeeService:
                 logger.info(f"✅ Paso 2 completado - Usuario creado con cliente administrativo: {auth_response.user.id}")
 
             except Exception as admin_error:
-                logger.error(f"❌ Error en Paso 2 con cliente administrativo: {admin_error}")
-                logger.error(f"🔍 Tipo de error: {type(admin_error).__name__}")
-                logger.error(f"🔍 Detalles completos: {str(admin_error)}")
-                import traceback
-                logger.error(f"🔍 Stack trace: {traceback.format_exc()}")
-                logger.info("🔄 Paso 2c: Intentando con método normal como fallback...")
+                logger.error(f"Error con cliente administrativo: {admin_error}")
+                logger.info("Intentando con método normal como fallback...")
 
                 # Fallback al método normal si el administrativo falla
                 auth_response = supabase.auth.sign_up({
@@ -150,8 +146,6 @@ class EmployeeService:
 
                 employee = employee_insert.data[0]
                 logger.info("✅ Paso 4 completado - Perfil de empleado creado")
-                logger.info(f"🔍 DEBUG: Datos del empleado creado: {employee}")
-                logger.info(f"🔍 DEBUG: Campos disponibles: {list(employee.keys()) if employee else 'None'}")
 
                 # 5. Enviar email de bienvenida personalizado usando SMTP directo (RF03)
                 logger.info("📍 Paso 5: Enviando email de bienvenida...")
@@ -172,16 +166,14 @@ class EmployeeService:
                 except Exception as email_error:
                     # No falla la creación si el email falla
                     logger.warning(f"⚠️ Error en Paso 5: {email_error}")
-                    logger.error(f"🔍 Tipo de error email: {type(email_error).__name__}")
-                    logger.error(f"🔍 Detalles del error email: {str(email_error)}")
+                    logger.error(f"Error enviando email: {email_error}")
 
                 logger.info("🏁 EMPLEADO CREADO EXITOSAMENTE - Construyendo respuesta...")
                 return self._build_employee_response(employee)
 
             except APIError as e:
                 logger.error(f"❌ APIError en creación de empleado: {e}")
-                logger.error(f"🔍 Tipo de error API: {type(e).__name__}")
-                logger.error(f"🔍 Detalles API error: {str(e)}")
+                logger.error(f"Error en API: {e}")
 
                 # Limpiar en caso de error usando cliente administrativo
                 try:
@@ -300,7 +292,8 @@ class EmployeeService:
     async def get_employee(self, employee_id: int, current_user: UserResponse) -> EmployeeResponse:
         """Obtener empleado por ID"""
         try:
-            query = supabase.table("employees").select("*").eq("id", employee_id)
+            admin_client = get_admin_supabase()
+            query = admin_client.table("employees").select("*").eq("id", employee_id)
 
             # Si no es manager, solo puede ver su propio perfil
             if current_user.role != UserRole.MANAGER:
@@ -335,8 +328,11 @@ class EmployeeService:
             )
 
         try:
+            # Usar cliente administrativo para evitar problemas de RLS
+            admin_client = get_admin_supabase()
+
             # Query base
-            query = supabase.table("employees").select("*")
+            query = admin_client.table("employees").select("*")
 
             # Filtrar por status si se especifica
             if status_filter:
@@ -351,8 +347,8 @@ class EmployeeService:
 
             employees_query = query.execute()
 
-            # Contar total de empleados
-            count_query = supabase.table("employees").select("id", count="exact")
+            # Contar total de empleados usando el cliente administrativo
+            count_query = admin_client.table("employees").select("id", count="exact")
             if status_filter:
                 count_query = count_query.eq("status", status_filter)
             count_result = count_query.execute()
