@@ -1,0 +1,44 @@
+# Entorno virtual local — se reconstruye dentro del contenedor
+venv/
+.venv/
+
+# Caché de Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+
+# Variables de entorno — nunca deben entrar en la imagen
+.env
+.env.*
+!.env.example
+
+# Herramientas de desarrollo y tests
+.pytest_cache/
+.mypy_cache/
+htmlcov/
+.coverage
+coverage.xml
+*.cover
+
+# Docker (evitar recursión)
+Dockerfile*
+docker-compose*.yml
+.dockerignore
+
+# Control de versiones
+.git/
+.gitignore
+
+# IDEs y sistemas operativos
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Documentación y miscelánea
+*.md
+*.log
