@@ -22,6 +22,16 @@ logger = logging.getLogger(__name__)
 MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
 DELIVERABLES_BUCKET = "deliverables"
 
+# Tipos de archivo permitidos para entregables
+ALLOWED_EXTENSIONS = {"pdf", "doc", "docx", "xls", "xlsx"}
+ALLOWED_MIME_TYPES = {
+    "application/pdf",
+    "application/msword",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/vnd.ms-excel",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+}
+
 
 class TaskService:
     # -------------------------------------------------------------------------
@@ -260,15 +270,33 @@ class TaskService:
     async def upload_deliverable(
         self, task_id: int, file: UploadFile
     ) -> TaskDeliverableResponse:
+        # Validar extensión del archivo
+        filename = file.filename or ""
+        ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+        if ext not in ALLOWED_EXTENSIONS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Tipo de archivo no permitido (.{ext or 'desconocido'}). "
+                       f"Solo se aceptan: PDF, Word (.doc, .docx) y Excel (.xls, .xlsx)."
+            )
+
+        # Validar MIME type como segunda capa de seguridad
+        if file.content_type and file.content_type not in ALLOWED_MIME_TYPES:
+            raise HTTPException(
+                status_code=400,
+                detail="El tipo de contenido del archivo no está permitido. "
+                       "Solo se aceptan documentos PDF, Word y Excel."
+            )
+
         # Validar tamaño
         content = await file.read()
         if len(content) > MAX_FILE_SIZE:
             raise HTTPException(
-                status_code=400, detail="El archivo no puede exceder 10MB"
+                status_code=400, detail="El archivo no puede exceder 10MB."
             )
 
         try:
-            ext = (file.filename or "file").rsplit(".", 1)[-1]
+            ext = ext  # ya calculado arriba
             path = f"task_{task_id}/{uuid.uuid4()}.{ext}"
 
             supabase.storage.from_(DELIVERABLES_BUCKET).upload(
