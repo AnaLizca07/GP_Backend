@@ -48,7 +48,8 @@ app = FastAPI(
 )
 
 # Configurar CORS — orígenes leídos desde FRONTEND_URL (puede ser CSV para múltiples)
-_cors_origins = [o.strip() for o in settings.FRONTEND_URL.split(",") if o.strip()]
+# Se elimina la barra final para evitar mismatch con el Origin que envía el navegador
+_cors_origins = [o.strip().rstrip("/") for o in settings.FRONTEND_URL.split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins,

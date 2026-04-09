@@ -22,6 +22,16 @@ logger = logging.getLogger(__name__)
 MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
 DELIVERABLES_BUCKET = "deliverables"
 
+# Tipos de archivo permitidos para entregables
+ALLOWED_EXTENSIONS = {"pdf", "doc", "docx", "xls", "xlsx"}
+ALLOWED_MIME_TYPES = {
+    "application/pdf",
+    "application/msword",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/vnd.ms-excel",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+}
+
 
 class TaskService:
     # -------------------------------------------------------------------------
@@ -260,15 +270,33 @@ class TaskService:
     async def upload_deliverable(
         self, task_id: int, file: UploadFile
     ) -> TaskDeliverableResponse:
+        # Validar extensión del archivo
+        filename = file.filename or ""
+        ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+        if ext not in ALLOWED_EXTENSIONS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Tipo de archivo no permitido (.{ext or 'desconocido'}). "
+                       f"Solo se aceptan: PDF, Word (.doc, .docx) y Excel (.xls, .xlsx)."
+            )
+
+        # Validar MIME type como segunda capa de seguridad
+        if file.content_type and file.content_type not in ALLOWED_MIME_TYPES:
+            raise HTTPException(
+                status_code=400,
+                detail="El tipo de contenido del archivo no está permitido. "
+                       "Solo se aceptan documentos PDF, Word y Excel."
+            )
+
         # Validar tamaño
         content = await file.read()
         if len(content) > MAX_FILE_SIZE:
             raise HTTPException(
-                status_code=400, detail="El archivo no puede exceder 10MB"
+                status_code=400, detail="El archivo no puede exceder 10MB."
             )
 
         try:
-            ext = (file.filename or "file").rsplit(".", 1)[-1]
+            ext = ext  # ya calculado arriba
             path = f"task_{task_id}/{uuid.uuid4()}.{ext}"
 
             supabase.storage.from_(DELIVERABLES_BUCKET).upload(
@@ -306,12 +334,36 @@ class TaskService:
             logger.error(f"Error subiendo entregable para tarea {task_id}: {e}")
             raise HTTPException(status_code=500, detail=f"Error al subir archivo: {str(e)}")
 
-    async def get_all_deliverables(self) -> List[dict]:
-        """Obtener todos los entregables con info de tarea, proyecto y empleado (para managers)."""
+    async def get_all_deliverables(self, manager_id: str) -> List[dict]:
+        """Obtener entregables del gerente actual (solo proyectos que él creó)."""
         try:
+            # 1. Obtener los IDs de proyectos del gerente
+            proj_resp = (
+                supabase.table("projects")
+                .select("id")
+                .eq("created_by", manager_id)
+                .execute()
+            )
+            project_ids = [p["id"] for p in proj_resp.data]
+            if not project_ids:
+                return []
+
+            # 2. Obtener los IDs de tareas dentro de esos proyectos
+            task_resp = (
+                supabase.table("tasks")
+                .select("id")
+                .in_("project_id", project_ids)
+                .execute()
+            )
+            task_ids = [t["id"] for t in task_resp.data]
+            if not task_ids:
+                return []
+
+            # 3. Obtener entregables solo de esas tareas
             response = (
                 supabase.table("task_deliverables")
                 .select("*, tasks(id, title, status, projects(id, name), employees(id, name))")
+                .in_("task_id", task_ids)
                 .order("uploaded_at", desc=True)
                 .execute()
             )
@@ -334,7 +386,7 @@ class TaskService:
                 })
             return result
         except Exception as e:
-            logger.error(f"Error obteniendo todos los entregables: {e}")
+            logger.error(f"Error obteniendo entregables del gerente {manager_id}: {e}")
             raise
 
     async def get_deliverables(self, task_id: int) -> List[TaskDeliverableResponse]:
