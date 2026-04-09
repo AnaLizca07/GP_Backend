@@ -498,7 +498,9 @@ class EmployeeService:
                     detail="No tiene permisos para ver este empleado"
                 )
 
-            employee_query = supabase.table("employees").select("*").eq("user_id", user_id).execute()
+            # Usar admin para bypassear RLS y garantizar que el empleado pueda leer su propio perfil
+            admin_client = get_admin_supabase()
+            employee_query = admin_client.table("employees").select("*").eq("user_id", user_id).execute()
 
             if not employee_query.data:
                 raise HTTPException(
