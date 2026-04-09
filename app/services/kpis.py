@@ -379,33 +379,50 @@ class KpiService:
                 .execute()
             )
             projects = projects_res.data or []
+            if not projects:
+                return []
+
+            project_ids = [p["id"] for p in projects]
+
+            # ── Batch fetch tasks + transactions for ALL projects in 2 queries ──
+            # (previously: 2 queries × N projects = 2N sequential queries)
+            all_tasks_res = (
+                sb.table("tasks")
+                .select("id, status, project_id")
+                .in_("project_id", project_ids)
+                .execute()
+            )
+            all_txs_res = (
+                sb.table("transactions")
+                .select("amount, type, project_id")
+                .in_("project_id", project_ids)
+                .execute()
+            )
+
+            # Group by project_id in memory
+            tasks_by_project: dict = {}
+            for t in (all_tasks_res.data or []):
+                tasks_by_project.setdefault(t["project_id"], []).append(t)
+
+            txs_by_project: dict = {}
+            for t in (all_txs_res.data or []):
+                txs_by_project.setdefault(t["project_id"], []).append(t)
 
             result = []
             for p in projects:
                 project_id = p["id"]
                 budget = float(p.get("budget") or 0)
 
+                tasks = tasks_by_project.get(project_id, [])
+                txs = txs_by_project.get(project_id, [])
+
                 # ── Earned Value (EV) via task completion ─────────────────
-                tasks_res = (
-                    sb.table("tasks")
-                    .select("id, status")
-                    .eq("project_id", project_id)
-                    .execute()
-                )
-                tasks = tasks_res.data or []
                 total_tasks = len(tasks)
                 completed_tasks = sum(1 for t in tasks if t["status"] == "completed")
                 progress_pct = (completed_tasks / total_tasks * 100) if total_tasks > 0 else 0.0
                 ev = (progress_pct / 100.0) * budget
 
                 # ── Actual Cost (AC) via expense transactions ─────────────
-                tx_res = (
-                    sb.table("transactions")
-                    .select("amount, type")
-                    .eq("project_id", project_id)
-                    .execute()
-                )
-                txs = tx_res.data or []
                 ac = sum(float(t["amount"]) for t in txs if t["type"] == "expense")
 
                 # ── CPI ───────────────────────────────────────────────────
