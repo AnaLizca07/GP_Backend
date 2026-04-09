@@ -74,10 +74,10 @@ class EmployeeCreateComplete(BaseModel):
     @validator('email')
     def validate_institutional_email(cls, v):
         """Validar que sea email institucional (RF02)"""
-        allowed_domains = ['.cue.edu.co', '.unihumboldt.edu.co']
-        if not any(v.endswith(domain) for domain in allowed_domains):
-            raise ValueError('El correo debe ser institucional (.cue.edu.co o .unihumboldt.edu.co)')
-        return v
+        allowed_domains = ['@cue.edu.co', '@unihumboldt.edu.co']
+        if not any(v.lower().endswith(domain) for domain in allowed_domains):
+            raise ValueError('El correo debe ser institucional (@cue.edu.co o @unihumboldt.edu.co)')
+        return v.lower()
 
 class EmployeeCreate(BaseModel):
     """Modelo para crear solo perfil de empleado (cuando ya existe el usuario)"""

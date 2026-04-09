@@ -291,21 +291,25 @@ class ProjectService:
     async def get_project_employees(
         self, project_id: int
     ) -> Optional[List[ProjectEmployeeResponse]]:
-        """Listar empleados asignados a un proyecto"""
-        try:
-            check = supabase.table("projects").select("id").eq("id", project_id).execute()
-            if not check.data:
-                return None
+        """Listar empleados asignados a un proyecto.
 
-            response = (
-                supabase.table("project_employees")
-                .select("id, employee_id, dedication_percentage, assigned_at, employees(id, name, position)")
-                .eq("project_id", project_id)
+        Usa un join directo desde projects para validar existencia y traer
+        miembros en una sola query (antes eran 2 queries separadas).
+        """
+        try:
+            # Single query: verify project exists AND get its members via join
+            proj_res = (
+                supabase.table("projects")
+                .select("id, project_employees(id, employee_id, dedication_percentage, assigned_at, employees(id, name, position))")
+                .eq("id", project_id)
                 .execute()
             )
+            if not proj_res.data:
+                return None  # Project not found → API returns 404
 
+            pe_list = proj_res.data[0].get("project_employees") or []
             result = []
-            for pe in response.data:
+            for pe in pe_list:
                 employee = pe.get("employees") or {}
                 result.append(ProjectEmployeeResponse(
                     id=pe["id"],

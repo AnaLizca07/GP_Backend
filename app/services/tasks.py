@@ -440,29 +440,10 @@ class TaskService:
     async def _format_task(
         self, row: dict, include_deliverables: bool = False
     ) -> TaskResponse:
-        project_name = ""
-        if row.get("projects"):
-            project_name = row["projects"]["name"]
-        elif row.get("project_id"):
-            pr = (
-                supabase.table("projects")
-                .select("name")
-                .eq("id", row["project_id"])
-                .execute()
-            )
-            project_name = pr.data[0]["name"] if pr.data else ""
-
-        employee_name = ""
-        if row.get("employees"):
-            employee_name = row["employees"]["name"]
-        elif row.get("employee_id"):
-            er = (
-                supabase.table("employees")
-                .select("name")
-                .eq("id", row["employee_id"])
-                .execute()
-            )
-            employee_name = er.data[0]["name"] if er.data else ""
+        # All callers use select("*, projects(id,name), employees(id,name)"),
+        # so the joined data is always present — no fallback queries needed.
+        project_name = (row.get("projects") or {}).get("name", "")
+        employee_name = (row.get("employees") or {}).get("name", "")
 
         deliverables = []
         if include_deliverables:
