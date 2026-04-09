@@ -64,7 +64,7 @@ async def get_all_deliverables(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Solo los gerentes pueden ver todos los entregables",
         )
-    return await task_service.get_all_deliverables()
+    return await task_service.get_all_deliverables(manager_id=current_user.id)
 
 @router.get("/{task_id}", response_model=TaskResponse)
 async def get_task(

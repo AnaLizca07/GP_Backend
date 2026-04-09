@@ -306,12 +306,36 @@ class TaskService:
             logger.error(f"Error subiendo entregable para tarea {task_id}: {e}")
             raise HTTPException(status_code=500, detail=f"Error al subir archivo: {str(e)}")
 
-    async def get_all_deliverables(self) -> List[dict]:
-        """Obtener todos los entregables con info de tarea, proyecto y empleado (para managers)."""
+    async def get_all_deliverables(self, manager_id: str) -> List[dict]:
+        """Obtener entregables del gerente actual (solo proyectos que él creó)."""
         try:
+            # 1. Obtener los IDs de proyectos del gerente
+            proj_resp = (
+                supabase.table("projects")
+                .select("id")
+                .eq("created_by", manager_id)
+                .execute()
+            )
+            project_ids = [p["id"] for p in proj_resp.data]
+            if not project_ids:
+                return []
+
+            # 2. Obtener los IDs de tareas dentro de esos proyectos
+            task_resp = (
+                supabase.table("tasks")
+                .select("id")
+                .in_("project_id", project_ids)
+                .execute()
+            )
+            task_ids = [t["id"] for t in task_resp.data]
+            if not task_ids:
+                return []
+
+            # 3. Obtener entregables solo de esas tareas
             response = (
                 supabase.table("task_deliverables")
                 .select("*, tasks(id, title, status, projects(id, name), employees(id, name))")
+                .in_("task_id", task_ids)
                 .order("uploaded_at", desc=True)
                 .execute()
             )
@@ -334,7 +358,7 @@ class TaskService:
                 })
             return result
         except Exception as e:
-            logger.error(f"Error obteniendo todos los entregables: {e}")
+            logger.error(f"Error obteniendo entregables del gerente {manager_id}: {e}")
             raise
 
     async def get_deliverables(self, task_id: int) -> List[TaskDeliverableResponse]:
