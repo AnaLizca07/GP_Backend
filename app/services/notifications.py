@@ -191,7 +191,7 @@ class NotificationService:
                         </div>
 
                         <div style="text-align: center; margin: 30px 0;">
-                            <a href="#" class="button">🚀 Acceder al Sistema</a>
+                            <a href="https://gp-frontend-ebon.vercel.app/login" class="button">🚀 Acceder al Sistema</a>
                         </div>
 
                         <h3>📞 ¿Necesitas Ayuda?</h3>
@@ -298,7 +298,7 @@ class NotificationService:
                         </ul>
 
                         <div style="text-align: center; margin: 30px 0;">
-                            <a href="#" class="button">🔑 Iniciar Sesión</a>
+                            <a href="https://gp-frontend-ebon.vercel.app/login" class="button">🔑 Iniciar Sesión</a>
                         </div>
 
                         <p>Si tienes dudas o necesitas asistencia, contacta a tu administrador del sistema.</p>
