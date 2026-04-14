@@ -357,7 +357,7 @@ class AuthService:
         try:
             response = supabase.auth.reset_password_email(
                 email,
-                {"redirect_to": "https://gp-frontend-ebon.vercel.app/auth/reset-password"}
+                {"redirect_to": "https://gp-frontend-ebon.vercel.app/reset-password"}
             )
             return {"message": "Email de recuperación enviado"}
         except Exception as e:
