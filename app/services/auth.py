@@ -355,7 +355,10 @@ class AuthService:
     async def reset_password(self, email: str) -> dict:
         """Enviar email de reset de contraseña"""
         try:
-            response = supabase.auth.reset_password_email(email)
+            response = supabase.auth.reset_password_email(
+                email,
+                {"redirect_to": "https://gp-frontend-ebon.vercel.app/reset-password"}
+            )
             return {"message": "Email de recuperación enviado"}
         except Exception as e:
             logger.error(f"Error en reset de contraseña: {e}")
