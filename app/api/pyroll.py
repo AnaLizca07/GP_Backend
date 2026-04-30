@@ -27,6 +27,16 @@ from app.api.deps import get_current_user, require_manager
 
 router = APIRouter(prefix="/payroll", tags=["payroll"])
 
+
+def _require_project_exists(user_id: str) -> None:
+    """Lanza 403 si el manager no tiene ningún proyecto creado."""
+    res = get_admin_supabase().table("projects").select("id").eq("created_by", user_id).limit(1).execute()
+    if not res.data:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Debes tener al menos un proyecto creado antes de procesar nómina.",
+        )
+
 @router.post("/calculate", response_model=PayrollCalculationResult)
 async def calculate_payroll(
     calculation_request: PayrollCalculationRequest,
@@ -43,6 +53,7 @@ async def calculate_payroll(
 
     Acceso: Solo gerentes
     """
+    _require_project_exists(current_user.id)
     try:
         # Obtener datos del empleado
         employee = await employee_service.get_employee(
@@ -451,6 +462,7 @@ async def process_payroll_payment(
 
     Acceso: Solo gerentes
     """
+    _require_project_exists(current_user.id)
     try:
         # Calcular nómina
         employee = await employee_service.get_employee(
@@ -472,6 +484,49 @@ async def process_payroll_payment(
 
         # Obtener registro completo con datos del empleado
         payroll_response = await payroll_db_service.get_payroll_by_id(payroll_record.id)
+
+        # RF22: Generar comprobante PDF, subirlo a Storage y enviar email
+        try:
+            deductions_dict = {
+                "salud": calculation.social_security_deductions.health,
+                "pension": calculation.social_security_deductions.pension,
+                "fondo_solidaridad": calculation.social_security_deductions.solidarity_fund,
+                "otros": calculation.special_deductions,
+            }
+            employer_dict = {
+                "salud": calculation.employer_contributions.health,
+                "pension": calculation.employer_contributions.pension,
+                "arl": calculation.employer_contributions.arl,
+                "caja_compensacion": calculation.employer_contributions.family_compensation,
+                "icbf": calculation.employer_contributions.icbf,
+                "sena": calculation.employer_contributions.sena,
+            }
+            benefits_dict = {}
+            if calculation.benefits:
+                benefits_dict = {
+                    "cesantias": calculation.benefits.severance,
+                    "intereses_cesantias": calculation.benefits.severance_interest,
+                    "prima_servicios": calculation.benefits.service_bonus,
+                    "vacaciones": calculation.benefits.vacation_amount,
+                }
+            receipt_url = await process_payroll_receipt(
+                payroll_id=payroll_record.id,
+                employee_id=calculation_request.employee_id,
+                employee_name=calculation.employee_name,
+                period_start=str(calculation_request.period_start),
+                period_end=str(calculation_request.period_end),
+                base_salary=float(calculation.base_salary),
+                deductions=deductions_dict,
+                employer_contributions=employer_dict,
+                benefits=benefits_dict,
+                net_pay=float(calculation.net_salary),
+            )
+            if receipt_url:
+                await payroll_db_service.mark_payroll_as_paid(payroll_record.id, receipt_url)
+                payroll_response = await payroll_db_service.get_payroll_by_id(payroll_record.id)
+        except Exception as receipt_err:
+            import logging
+            logging.getLogger(__name__).warning(f"Error generando comprobante de nómina {payroll_record.id}: {receipt_err}")
 
         # RF24: Notificar al empleado que su nómina fue procesada
         try:
@@ -505,6 +560,8 @@ async def process_payroll_payment(
 
         return payroll_response
 
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

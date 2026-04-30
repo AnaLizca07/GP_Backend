@@ -86,7 +86,7 @@ async def update_task(
     task_data: TaskUpdate,
     current_user: UserResponse = Depends(get_current_user),
 ):
-    """Actualizar tarea. Acceso: managers."""
+    """Actualizar tarea. Acceso: solo managers."""
     if current_user.role != "manager":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,

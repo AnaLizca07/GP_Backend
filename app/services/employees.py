@@ -375,8 +375,9 @@ class EmployeeService:
     async def update_employee(self, employee_id: int, employee_data: EmployeeUpdate, current_user: UserResponse) -> EmployeeResponse:
         """Actualizar empleado"""
         try:
+            admin_client = get_admin_supabase()
             # Verificar que el empleado existe
-            existing_query = supabase.table("employees").select("*").eq("id", employee_id).execute()
+            existing_query = admin_client.table("employees").select("*").eq("id", employee_id).execute()
             if not existing_query.data:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
@@ -398,8 +399,10 @@ class EmployeeService:
                 # Empleados solo pueden editar: foto de perfil, correo (en users), dirección
                 if employee_data.address is not None:
                     update_data["address"] = employee_data.address
-                if employee_data.resume_url is not None:
-                    update_data["resume_url"] = employee_data.resume_url
+                # resume_url puede ser None (para borrar) o una URL — incluir si fue explícitamente enviado
+                dumped = employee_data.model_dump(exclude_unset=True)
+                if "resume_url" in dumped:
+                    update_data["resume_url"] = dumped["resume_url"]
                 if employee_data.phone is not None:
                     update_data["phone"] = employee_data.phone
             else:
@@ -417,7 +420,7 @@ class EmployeeService:
             update_data["updated_at"] = datetime.utcnow().isoformat()
 
             # Actualizar empleado
-            employee_update = supabase.table("employees").update(update_data).eq("id", employee_id).execute()
+            employee_update = admin_client.table("employees").update(update_data).eq("id", employee_id).execute()
 
             if not employee_update.data:
                 raise HTTPException(
@@ -457,8 +460,9 @@ class EmployeeService:
             )
 
         try:
+            admin_client = get_admin_supabase()
             # Verificar que el empleado existe
-            existing_query = supabase.table("employees").select("*").eq("id", employee_id).execute()
+            existing_query = admin_client.table("employees").select("*").eq("id", employee_id).execute()
             if not existing_query.data:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
@@ -466,7 +470,7 @@ class EmployeeService:
                 )
 
             # En lugar de eliminar físicamente, marcamos como inactivo (soft delete)
-            employee_update = supabase.table("employees").update({
+            employee_update = admin_client.table("employees").update({
                 "status": "inactive",
                 "updated_at": datetime.utcnow().isoformat()
             }).eq("id", employee_id).execute()
