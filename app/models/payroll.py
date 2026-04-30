@@ -51,6 +51,7 @@ class PayrollCalculationRequest(BaseModel):
     pay_period: PayPeriod
     period_start: date
     period_end: date
+    employee_type: Optional[EmployeeType] = Field(default=EmployeeType.EMPLOYEE, description="Tipo de contrato")
     worked_hours: Optional[float] = None  # Para empleados por horas
     base_salary: Optional[float] = None   # Override del salario base
     additional_income: Optional[float] = Field(default=0, description="Ingresos adicionales")
@@ -116,8 +117,8 @@ class PayrollCalculationResult(BaseModel):
 
     # Salarios base
     base_salary: float = Field(description="Salario base del período")
-    worked_hours: Optional[float] = Field(description="Horas trabajadas")
-    hourly_rate: Optional[float] = Field(description="Tarifa por hora")
+    worked_hours: Optional[float] = Field(default=None, description="Horas trabajadas")
+    hourly_rate: Optional[float] = Field(default=None, description="Tarifa por hora")
 
     # Ingresos
     additional_income: float = Field(description="Ingresos adicionales")
