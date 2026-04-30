@@ -47,7 +47,7 @@ class PayrollCalculationService:
         logger.info(f"Calculando nómina para empleado {employee.id} - período {request.period_start} a {request.period_end}")
 
         # Determinar tipo de empleado y salario base
-        employee_type = self._determine_employee_type(employee)
+        employee_type = self._determine_employee_type(employee, request)
         base_salary = self._calculate_base_salary(employee, request)
 
         # Calcular ingreso bruto
@@ -260,10 +260,10 @@ class PayrollCalculationService:
             total_benefits=total_benefits
         )
 
-    def _determine_employee_type(self, employee: EmployeeResponse) -> EmployeeType:
+    def _determine_employee_type(self, employee: EmployeeResponse, request: 'PayrollCalculationRequest' = None) -> EmployeeType:
         """Determina si es empleado dependiente o contratista"""
-        # Por ahora asumimos que todos son empleados dependientes
-        # En el futuro se puede agregar un campo employee_type al modelo Employee
+        if request and request.employee_type:
+            return request.employee_type
         return EmployeeType.EMPLOYEE
 
     def _calculate_base_salary(self, employee: EmployeeResponse, request: PayrollCalculationRequest) -> float:
