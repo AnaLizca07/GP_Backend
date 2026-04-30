@@ -11,13 +11,13 @@ class UserRole(str, Enum):
 # Modelos de Request (entrada)
 class UserRegister(BaseModel):
     email: EmailStr
-    password: str = Field(..., min_length=6, max_length=100)
+    password: str = Field(..., min_length=8, max_length=100)
     role: UserRole
 
     @validator('password')
     def validate_password(cls, v):
-        if len(v) < 6:
-            raise ValueError('La contraseña debe tener al menos 6 caracteres')
+        if len(v) < 8:
+            raise ValueError('La contraseña debe tener al menos 8 caracteres')
         return v
 
 class UserLogin(BaseModel):
@@ -28,7 +28,7 @@ class PasswordReset(BaseModel):
     email: EmailStr
 
 class PasswordUpdate(BaseModel):
-    password: str = Field(..., min_length=6, max_length=100)
+    password: str = Field(..., min_length=8, max_length=100)
 
 # Modelos de Response (salida)
 class UserResponse(BaseModel):
@@ -71,13 +71,13 @@ class EmployeeCreateComplete(BaseModel):
     resume_url: Optional[str] = None
     status: Literal["active", "inactive"] = "active"
 
-    @validator('email')
-    def validate_institutional_email(cls, v):
-        """Validar que sea email institucional (RF02)"""
-        allowed_domains = ['@cue.edu.co', '@unihumboldt.edu.co']
-        if not any(v.lower().endswith(domain) for domain in allowed_domains):
-            raise ValueError('El correo debe ser institucional (@cue.edu.co o @unihumboldt.edu.co)')
-        return v.lower()
+    # @validator('email')
+    # def validate_institutional_email(cls, v):
+    #     """Validar que sea email institucional (RF02)"""
+    #     allowed_domains = ['@cue.edu.co', '@unihumboldt.edu.co']
+    #     if not any(v.lower().endswith(domain) for domain in allowed_domains):
+    #         raise ValueError('El correo debe ser institucional (@cue.edu.co o @unihumboldt.edu.co)')
+    #     return v.lower()
 
 class EmployeeCreate(BaseModel):
     """Modelo para crear solo perfil de empleado (cuando ya existe el usuario)"""

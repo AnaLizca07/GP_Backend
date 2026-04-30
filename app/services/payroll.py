@@ -389,6 +389,29 @@ class PayrollCalculationService:
         try:
             # Importar aquí para evitar dependencias circulares
             from app.services.payroll_db import payroll_db_service
+            from fastapi import HTTPException
+
+            # Verificar nómina duplicada para el mismo empleado y período
+            from app.database import get_admin_supabase
+            existing_check = (
+                get_admin_supabase()
+                .table("payroll")
+                .select("id")
+                .eq("employee_id", calculation.employee_id)
+                .eq("period_start", calculation.period_start.isoformat())
+                .eq("period_end", calculation.period_end.isoformat())
+                .limit(1)
+                .execute()
+            )
+            if existing_check.data:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"Ya existe una nómina procesada para el empleado {calculation.employee_id} "
+                        f"en el período {calculation.period_start} - {calculation.period_end}. "
+                        "No se permiten nóminas duplicadas para el mismo período."
+                    )
+                )
 
             # Guardar registro de nómina
             payroll_record = await payroll_db_service.save_payroll_record(

@@ -10,6 +10,16 @@ from app.api.deps import get_current_user, require_manager
 router = APIRouter(prefix="/finance", tags=["finance"])
 supabase = get_admin_supabase()
 
+
+def _require_project_exists(user_id: str) -> None:
+    """Lanza 403 si el manager no tiene ningún proyecto creado."""
+    res = get_admin_supabase().table("projects").select("id").eq("created_by", user_id).limit(1).execute()
+    if not res.data:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Debes tener al menos un proyecto creado antes de registrar transacciones financieras.",
+        )
+
 # ── Modelos ────────────────────────────────────────────────────────────────
 
 class TransactionCreate(BaseModel):
@@ -65,6 +75,7 @@ async def create_transaction(
     current_user: UserResponse = Depends(require_manager),
 ):
     """Registrar ingreso o egreso. Acceso: solo gerentes."""
+    _require_project_exists(current_user.id)
     try:
         result = supabase.table("transactions").insert({
             "type": data.type,

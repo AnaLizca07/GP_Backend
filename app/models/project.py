@@ -88,6 +88,8 @@ class ProjectEmployeeResponse(BaseModel):
     employee_id: int
     employee_name: str
     employee_position: Optional[str]
+    employee_phone: Optional[str] = None
+    employee_identification: Optional[str] = None
     dedication_percentage: Decimal
     assigned_at: datetime
 

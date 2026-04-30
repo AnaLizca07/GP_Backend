@@ -75,7 +75,7 @@ class ProjectService:
                 employee_id = await self._get_employee_id_by_user(user_id)
                 if employee_id is None:
                     return ProjectListResponse(projects=[], total=0, page=page, limit=limit)
-                pe_response = supabase.table("project_employees").select("project_id").eq("employee_id", employee_id).execute()
+                pe_response = get_admin_supabase().table("project_employees").select("project_id").eq("employee_id", employee_id).execute()
                 project_ids = [row["project_id"] for row in pe_response.data] if pe_response.data else []
 
             select_str = """
@@ -298,9 +298,10 @@ class ProjectService:
         """
         try:
             # Single query: verify project exists AND get its members via join
+            # Use admin client to bypass RLS on employees table
             proj_res = (
-                supabase.table("projects")
-                .select("id, project_employees(id, employee_id, dedication_percentage, assigned_at, employees(id, name, position))")
+                get_admin_supabase().table("projects")
+                .select("id, project_employees(id, employee_id, dedication_percentage, assigned_at, employees(id, name, position, phone, identification))")
                 .eq("id", project_id)
                 .execute()
             )
@@ -316,6 +317,8 @@ class ProjectService:
                     employee_id=pe["employee_id"],
                     employee_name=employee.get("name", ""),
                     employee_position=employee.get("position"),
+                    employee_phone=employee.get("phone"),
+                    employee_identification=employee.get("identification"),
                     dedication_percentage=pe["dedication_percentage"],
                     assigned_at=datetime.fromisoformat(pe["assigned_at"]),
                 ))
@@ -433,7 +436,7 @@ class ProjectService:
     async def _get_employee_id_by_user(self, user_id: str) -> Optional[int]:
         """Obtener ID del empleado por user_id"""
         try:
-            response = supabase.table("employees").select("id").eq("user_id", user_id).execute()
+            response = get_admin_supabase().table("employees").select("id").eq("user_id", user_id).execute()
             return response.data[0]['id'] if response.data else None
         except Exception as e:
             logger.error(f"Error obteniendo employee_id para user {user_id}: {e}")
@@ -443,7 +446,7 @@ class ProjectService:
         """Crear notificación de asignación a proyecto"""
         try:
             # Obtener información del empleado
-            employee_response = supabase.table("employees").select("user_id, name").eq("id", employee_id).execute()
+            employee_response = get_admin_supabase().table("employees").select("user_id, name").eq("id", employee_id).execute()
             if not employee_response.data:
                 return
 

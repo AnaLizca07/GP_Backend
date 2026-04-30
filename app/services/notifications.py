@@ -58,6 +58,7 @@ class NotificationService:
             self.smtp_from_name = os.getenv('SMTP_FROM_NAME', 'ProjeGest')
             self.use_tls = os.getenv('SMTP_USE_TLS', 'true').lower() == 'true'
             self.smtp_configured = bool(self.smtp_user and self.smtp_password)
+            self._smtp_initialized = True
 
     def _ensure_smtp_config(self):
         """Asegurar que la configuración SMTP está cargada"""

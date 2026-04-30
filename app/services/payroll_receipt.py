@@ -3,6 +3,7 @@ Servicio para generación de comprobantes de pago de nómina (PDF),
 subida a Supabase Storage y envío por correo electrónico.
 """
 import io
+import os
 import uuid
 import logging
 import smtplib
@@ -238,28 +239,24 @@ def upload_pdf_to_storage(pdf_bytes: bytes, payroll_id: int) -> str:
     filename = f"payroll/recibo_nomina_{payroll_id}_{uuid.uuid4().hex[:8]}.pdf"
 
     try:
-        admin.storage.from_("resumes").upload(
+        admin.storage.from_("payroll-receipts").upload(
             file=pdf_bytes,
             path=filename,
             file_options={"content-type": "application/pdf"},
         )
+        return admin.storage.from_("payroll-receipts").get_public_url(filename)
     except Exception as e:
-        # Si el bucket no existe, intentar crear uno público y reintentar
-        logger.warning(f"Error subiendo a 'resumes', intentando bucket 'payroll-receipts': {e}")
+        logger.warning(f"Error subiendo a 'payroll-receipts', intentando crear bucket: {e}")
         try:
             admin.storage.create_bucket("payroll-receipts", options={"public": True})
         except Exception:
             pass
         admin.storage.from_("payroll-receipts").upload(
             file=pdf_bytes,
-            path=f"recibo_nomina_{payroll_id}_{uuid.uuid4().hex[:8]}.pdf",
+            path=filename,
             file_options={"content-type": "application/pdf"},
         )
-        return admin.storage.from_("payroll-receipts").get_public_url(
-            f"recibo_nomina_{payroll_id}_{uuid.uuid4().hex[:8]}.pdf"
-        )
-
-    return admin.storage.from_("resumes").get_public_url(filename)
+        return admin.storage.from_("payroll-receipts").get_public_url(filename)
 
 
 # ─── Email ─────────────────────────────────────────────────────────────────
@@ -274,13 +271,21 @@ def send_payroll_email(
     receipt_url: Optional[str] = None,
 ) -> bool:
     """Envía el comprobante de pago por correo con el PDF adjunto."""
-    if not settings.SMTP_USER or not settings.SMTP_PASSWORD:
+    smtp_user = os.getenv("SMTP_USER")
+    smtp_password = os.getenv("SMTP_PASSWORD")
+    if not smtp_user or not smtp_password:
         logger.warning("SMTP no configurado — omitiendo envío de email de nómina")
         return False
 
+    smtp_host = os.getenv("SMTP_HOST", "smtp.gmail.com")
+    smtp_port = int(os.getenv("SMTP_PORT", "587"))
+    use_tls = os.getenv("SMTP_USE_TLS", "true").lower() == "true"
+    from_name = os.getenv("SMTP_FROM_NAME", "ProjeGest")
+    from_email = os.getenv("SMTP_FROM_EMAIL", smtp_user)
+
     try:
         msg = MIMEMultipart("mixed")
-        msg["From"]    = f"{settings.SMTP_FROM_NAME} <{settings.SMTP_FROM_EMAIL or settings.SMTP_USER}>"
+        msg["From"]    = f"{from_name} <{from_email}>"
         msg["To"]      = to_email
         msg["Subject"] = f"Comprobante de pago de nómina — {period_start} al {period_end}"
 
@@ -323,17 +328,14 @@ def send_payroll_email(
         )
         msg.attach(part)
 
-        smtp_host = settings.SMTP_HOST
-        smtp_port = settings.SMTP_PORT
-
-        if settings.SMTP_USE_TLS:
+        if use_tls:
             server = smtplib.SMTP(smtp_host, smtp_port)
             server.starttls()
         else:
             server = smtplib.SMTP_SSL(smtp_host, smtp_port)
 
-        server.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
-        server.sendmail(settings.SMTP_USER, to_email, msg.as_string())
+        server.login(smtp_user, smtp_password)
+        server.sendmail(from_email, to_email, msg.as_string())
         server.quit()
 
         logger.info(f"Email de nómina enviado a {to_email}")
@@ -408,15 +410,18 @@ async def process_payroll_receipt(
 
     # 4. Enviar email (no bloquea si falla)
     if employee_email:
-        send_payroll_email(
-            to_email=employee_email,
-            employee_name=employee_name,
-            period_start=period_start,
-            period_end=period_end,
-            net_pay=net_pay,
-            pdf_bytes=pdf_bytes,
-            receipt_url=receipt_url,
-        )
+        try:
+            send_payroll_email(
+                to_email=employee_email,
+                employee_name=employee_name,
+                period_start=period_start,
+                period_end=period_end,
+                net_pay=net_pay,
+                pdf_bytes=pdf_bytes,
+                receipt_url=receipt_url,
+            )
+        except Exception as e:
+            logger.warning(f"Error enviando email de nómina a {employee_email}: {e}")
     else:
         logger.warning(f"Sin email para empleado {employee_id} — comprobante generado pero no enviado")
 

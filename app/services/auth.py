@@ -103,6 +103,12 @@ class AuthService:
                 logger.info(f"✅ Usuario creado con cliente administrativo: {user_data.email}")
 
             except Exception as admin_error:
+                err_str = str(admin_error).lower()
+                if "already been registered" in err_str or "already registered" in err_str or "already exists" in err_str:
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail="El email ya está registrado"
+                    )
                 logger.warning(f"❌ Error con cliente administrativo: {admin_error}")
                 logger.info("🔄 Intentando con método normal como fallback...")
 
