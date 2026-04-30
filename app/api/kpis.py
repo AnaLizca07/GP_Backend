@@ -217,7 +217,10 @@ async def get_project_budget_summary(
     rows = tx_res.data or []
     spent = sum(float(r["amount"]) for r in rows if r["type"] == "expense")
     income = sum(float(r["amount"]) for r in rows if r["type"] == "income")
-    remaining = max(0.0, total_budget - spent)
+    # Saldo real = dinero efectivamente recibido - gastos (NO depende del presupuesto total)
+    available_balance = income - spent
+    # Presupuesto restante = referencia del contrato (cuánto queda por cobrar/gastar del total pactado)
+    budget_remaining = max(0.0, total_budget - spent)
     consumed_pct = round(spent / total_budget * 100, 1) if total_budget > 0 else 0.0
 
     return {
@@ -226,6 +229,7 @@ async def get_project_budget_summary(
         "total_budget": total_budget,
         "spent": spent,
         "income": income,
-        "remaining": remaining,
+        "available_balance": available_balance,   # saldo real: ingresos - egresos
+        "remaining": budget_remaining,            # presupuesto no consumido (referencia)
         "consumed_percentage": consumed_pct,
     }
