@@ -1,6 +1,7 @@
 from datetime import datetime
 from typing import Optional, List
 import logging
+import asyncio
 from fastapi import HTTPException, status
 from postgrest.exceptions import APIError
 
@@ -147,26 +148,20 @@ class EmployeeService:
                 employee = employee_insert.data[0]
                 logger.info("✅ Paso 4 completado - Perfil de empleado creado")
 
-                # 5. Enviar email de bienvenida personalizado usando SMTP directo (RF03)
-                logger.info("📍 Paso 5: Enviando email de bienvenida...")
-                try:
-                    logger.info(f"🎯 INTENTANDO ENVIAR EMAIL PERSONALIZADO a {employee_data.email}")
+                # 5. Enviar email de bienvenida en background (fire-and-forget, no bloquea la respuesta)
+                async def _send_welcome(email: str, name: str, pwd: str):
+                    try:
+                        sent = await notification_service.send_employee_welcome_email(email, name, pwd)
+                        if sent:
+                            logger.info(f"✅ Email de bienvenida enviado a {email}")
+                        else:
+                            logger.warning(f"⚠️ Email de bienvenida no enviado a {email}")
+                    except Exception as e:
+                        logger.warning(f"⚠️ Error enviando email de bienvenida: {e}")
 
-                    email_sent = await notification_service.send_employee_welcome_email(
-                        email=employee_data.email,
-                        name=employee_data.name,
-                        temporary_password=temporary_password
-                    )
-
-                    if email_sent:
-                        logger.info(f"✅ Paso 5 completado - Email enviado exitosamente a {employee_data.email}")
-                    else:
-                        logger.warning(f"⚠️ Paso 5 falló - Email no se pudo enviar, pero empleado creado exitosamente")
-
-                except Exception as email_error:
-                    # No falla la creación si el email falla
-                    logger.warning(f"⚠️ Error en Paso 5: {email_error}")
-                    logger.error(f"Error enviando email: {email_error}")
+                asyncio.create_task(_send_welcome(
+                    employee_data.email, employee_data.name, temporary_password
+                ))
 
                 logger.info("🏁 EMPLEADO CREADO EXITOSAMENTE - Construyendo respuesta...")
                 return self._build_employee_response(employee)

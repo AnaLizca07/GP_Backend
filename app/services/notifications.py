@@ -124,7 +124,7 @@ class NotificationService:
             msg.attach(html_part)
 
             # Conectar y enviar
-            with smtplib.SMTP(self.smtp_host, self.smtp_port) as server:
+            with smtplib.SMTP(self.smtp_host, self.smtp_port, timeout=10) as server:
                 if self.use_tls:
                     server.starttls()
 
@@ -618,7 +618,7 @@ class NotificationService:
                 part.add_header('Content-Disposition', 'attachment', filename=filename)
                 msg.attach(part)
 
-            with smtplib.SMTP(self.smtp_host, self.smtp_port) as server:
+            with smtplib.SMTP(self.smtp_host, self.smtp_port, timeout=10) as server:
                 if self.use_tls:
                     server.starttls()
                 if self.smtp_user and self.smtp_password:
