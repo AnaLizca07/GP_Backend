@@ -78,3 +78,8 @@ async def root():
         "version": "1.0.0",
         "docs": "/docs",
     }
+
+
+@app.api_route("/health", methods=["GET", "HEAD"])
+async def health():
+    return {"status": "ok"}
