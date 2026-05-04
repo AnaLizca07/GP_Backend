@@ -329,10 +329,10 @@ def send_payroll_email(
         msg.attach(part)
 
         if use_tls:
-            server = smtplib.SMTP(smtp_host, smtp_port)
+            server = smtplib.SMTP(smtp_host, smtp_port, timeout=10)
             server.starttls()
         else:
-            server = smtplib.SMTP_SSL(smtp_host, smtp_port)
+            server = smtplib.SMTP_SSL(smtp_host, smtp_port, timeout=10)
 
         server.login(smtp_user, smtp_password)
         server.sendmail(from_email, to_email, msg.as_string())
