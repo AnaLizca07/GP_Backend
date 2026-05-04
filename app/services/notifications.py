@@ -1,69 +1,106 @@
 import secrets
 import string
 import logging
-import smtplib
-import os
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
-from email.mime.base import MIMEBase
-from email import encoders
+import json
+import base64
+import asyncio
+from urllib.request import urlopen, Request
+from urllib.error import URLError
 from typing import Optional, Dict, Any, List, Tuple
 from fastapi import HTTPException
 
 logger = logging.getLogger(__name__)
 
+BREVO_API_URL = "https://api.brevo.com/v3/smtp/email"
+
 class NotificationService:
     def __init__(self):
-        self._smtp_initialized = False
-        self._load_smtp_config()
+        self._load_brevo_config()
 
-    def _load_smtp_config(self):
-        """Cargar configuración SMTP desde settings"""
+    def _load_brevo_config(self):
         try:
             from app.config import settings
-
-            # Configuración SMTP desde settings
-            self.smtp_host = settings.SMTP_HOST or 'smtp.gmail.com'
-            self.smtp_port = settings.SMTP_PORT or 587
-            self.smtp_user = settings.SMTP_USER
-            # Limpiar espacios de la contraseña (las contraseñas de aplicación de Gmail a veces tienen espacios)
-            self.smtp_password = settings.SMTP_PASSWORD.replace(' ', '') if settings.SMTP_PASSWORD else None
-            self.smtp_from_email = os.getenv('SMTP_FROM_EMAIL', self.smtp_user)
-            self.smtp_from_name = os.getenv('SMTP_FROM_NAME', 'ProjeGest')
-            self.use_tls = os.getenv('SMTP_USE_TLS', 'true').lower() == 'true'
-
-            # Validar que las credenciales SMTP están configuradas
-            invalid_placeholders = ['tu-email@gmail.com', 'tu-password-de-aplicacion', 'your-email@example.com']
-
-            if (not self.smtp_user or
-                not self.smtp_password or
-                self.smtp_user in invalid_placeholders or
-                self.smtp_password in invalid_placeholders):
-                logger.warning("SMTP not configured properly. Email notifications will be displayed in console.")
-                self.smtp_configured = False
-            else:
-                self.smtp_configured = True
-                logger.info(f"SMTP configured successfully for {self.smtp_user[:3]}***@***")
-
-            self._smtp_initialized = True
-
+            self.brevo_api_key = settings.BREVO_API_KEY or ""
+            self.from_email = settings.SMTP_FROM_EMAIL or ""
+            self.from_name = settings.SMTP_FROM_NAME or "ProjeGest"
         except Exception as e:
-            logger.error(f"Error loading SMTP config: {e}")
-            # Fallback a variables de entorno directas
-            self.smtp_host = os.getenv('SMTP_HOST', 'smtp.gmail.com')
-            self.smtp_port = int(os.getenv('SMTP_PORT', '587'))
-            self.smtp_user = os.getenv('SMTP_USER')
-            self.smtp_password = os.getenv('SMTP_PASSWORD').replace(' ', '') if os.getenv('SMTP_PASSWORD') else None
-            self.smtp_from_email = os.getenv('SMTP_FROM_EMAIL', self.smtp_user)
-            self.smtp_from_name = os.getenv('SMTP_FROM_NAME', 'ProjeGest')
-            self.use_tls = os.getenv('SMTP_USE_TLS', 'true').lower() == 'true'
-            self.smtp_configured = bool(self.smtp_user and self.smtp_password)
-            self._smtp_initialized = True
+            logger.error(f"Error loading Brevo config: {e}")
+            import os
+            self.brevo_api_key = os.getenv("BREVO_API_KEY", "")
+            self.from_email = os.getenv("SMTP_FROM_EMAIL", "")
+            self.from_name = os.getenv("SMTP_FROM_NAME", "ProjeGest")
 
-    def _ensure_smtp_config(self):
-        """Asegurar que la configuración SMTP está cargada"""
-        if not self._smtp_initialized:
-            self._load_smtp_config()
+        self.configured = bool(self.brevo_api_key and self.from_email)
+        if self.configured:
+            logger.info("Brevo API configured successfully")
+        else:
+            logger.warning("Brevo API not configured — emails will be skipped")
+
+    def _send_brevo_request(self, payload: dict) -> bool:
+        """Llamada síncrona a la API de Brevo (se ejecuta en thread executor)."""
+        data = json.dumps(payload).encode("utf-8")
+        req = Request(
+            BREVO_API_URL,
+            data=data,
+            headers={
+                "api-key": self.brevo_api_key,
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+            },
+            method="POST",
+        )
+        try:
+            with urlopen(req, timeout=15) as resp:
+                status = resp.status
+                if status in (200, 201):
+                    return True
+                logger.error(f"Brevo API error status {status}")
+                return False
+        except Exception as e:
+            logger.error(f"Brevo API request failed: {e}")
+            return False
+
+    async def _send_email(self, to_email: str, subject: str, html_content: str, text_content: str) -> bool:
+        """Enviar email via Brevo HTTP API (no bloquea el event loop)."""
+        if not self.configured:
+            logger.warning(f"Brevo not configured — skipping email to {to_email}")
+            return False
+        payload = {
+            "sender": {"name": self.from_name, "email": self.from_email},
+            "to": [{"email": to_email}],
+            "subject": subject,
+            "htmlContent": html_content,
+            "textContent": text_content,
+        }
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, self._send_brevo_request, payload)
+
+    async def _send_email_with_attachment(
+        self,
+        to_email: str,
+        subject: str,
+        html_content: str,
+        text_content: str,
+        attachments: List[Tuple[str, bytes, str]],
+    ) -> bool:
+        """Enviar email con adjuntos via Brevo HTTP API."""
+        if not self.configured:
+            logger.warning(f"Brevo not configured — skipping email with attachment to {to_email}")
+            return False
+        attachment_list = [
+            {"content": base64.b64encode(data).decode("utf-8"), "name": filename}
+            for filename, data, _ in attachments
+        ]
+        payload = {
+            "sender": {"name": self.from_name, "email": self.from_email},
+            "to": [{"email": to_email}],
+            "subject": subject,
+            "htmlContent": html_content,
+            "textContent": text_content,
+            "attachment": attachment_list,
+        }
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, self._send_brevo_request, payload)
 
     def generate_temporary_password(self, length: int = 12) -> str:
         """
@@ -97,48 +134,6 @@ class NotificationService:
         secrets.SystemRandom().shuffle(password)
 
         return ''.join(password)
-
-    def _send_smtp_email(self, to_email: str, subject: str, html_content: str, text_content: str) -> bool:
-        """
-        Enviar email usando configuración SMTP directa
-        """
-        self._ensure_smtp_config()
-
-        if not self.smtp_configured:
-            logger.warning(f"SMTP not configured, would send email to {to_email}")
-            return False
-
-        try:
-            # Crear mensaje
-            msg = MIMEMultipart('alternative')
-            msg['Subject'] = subject
-            msg['From'] = f"{self.smtp_from_name} <{self.smtp_from_email}>"
-            msg['To'] = to_email
-
-            # Agregar contenido texto plano
-            text_part = MIMEText(text_content, 'plain', 'utf-8')
-            msg.attach(text_part)
-
-            # Agregar contenido HTML
-            html_part = MIMEText(html_content, 'html', 'utf-8')
-            msg.attach(html_part)
-
-            # Conectar y enviar
-            with smtplib.SMTP(self.smtp_host, self.smtp_port, timeout=10) as server:
-                if self.use_tls:
-                    server.starttls()
-
-                if self.smtp_user and self.smtp_password:
-                    server.login(self.smtp_user, self.smtp_password)
-
-                server.send_message(msg)
-
-            logger.info(f"Email sent successfully to {to_email}")
-            return True
-
-        except Exception as e:
-            logger.error(f"Error sending SMTP email: {e}")
-            return False
 
     async def send_employee_welcome_email(self, email: str, name: str, temporary_password: str) -> bool:
         """
@@ -235,12 +230,11 @@ class NotificationService:
             Por favor, no respondas a este correo
             """
 
-            # Enviar email usando SMTP
-            success = self._send_smtp_email(
+            success = await self._send_email(
                 to_email=email,
                 subject="🎉 ¡Bienvenido al Sistema PMIS! - Credenciales de Acceso",
                 html_content=html_content,
-                text_content=text_content
+                text_content=text_content,
             )
 
             if success:
@@ -336,11 +330,11 @@ class NotificationService:
             Por favor, no respondas a este correo
             """
 
-            return self._send_smtp_email(
+            return await self._send_email(
                 to_email=email,
                 subject="🔄 Cambio de Contraseña Requerido - Sistema PMIS",
                 html_content=html_content,
-                text_content=text_content
+                text_content=text_content,
             )
 
         except Exception as e:
@@ -410,11 +404,11 @@ class NotificationService:
             Por favor, no respondas a este correo
             """
 
-            return self._send_smtp_email(
+            return await self._send_email(
                 to_email=to_email,
                 subject=f"📢 {subject} - Sistema PMIS",
                 html_content=html_content,
-                text_content=text_content
+                text_content=text_content,
             )
 
         except Exception as e:
@@ -467,7 +461,7 @@ class NotificationService:
                 f"Proyecto: {project_name or '—'}\nFecha límite: {due_date or 'Sin fecha'}\n"
                 f"Prioridad: {priority_label}\n\nIngresa al sistema para más detalles."
             )
-            return self._send_smtp_email(
+            return await self._send_email(
                 to_email=employee_email,
                 subject=f"📋 Nueva tarea — {task_title} · PMIS",
                 html_content=html_content,
@@ -524,7 +518,7 @@ class NotificationService:
                 f"Neto a recibir: {net_pay_fmt}\n"
                 + (f"Comprobante: {receipt_url}\n" if receipt_url else "")
             )
-            return self._send_smtp_email(
+            return await self._send_email(
                 to_email=employee_email,
                 subject=f"💰 Nómina procesada — {period_start} · PMIS",
                 html_content=html_content,
@@ -575,7 +569,7 @@ class NotificationService:
                 "--- Mensaje automático, no respondas este correo ---"
             )
 
-            return self._send_smtp_email(
+            return await self._send_email(
                 to_email=manager_email,
                 subject=f"📄 Nueva hoja de vida — {employee_name} · PMIS",
                 html_content=html_content,
@@ -583,52 +577,6 @@ class NotificationService:
             )
         except Exception as e:
             logger.error(f"Error enviando notificación de CV: {e}")
-            return False
-
-    def _send_smtp_email_with_attachment(
-        self,
-        to_email: str,
-        subject: str,
-        html_content: str,
-        text_content: str,
-        attachments: List[Tuple[str, bytes, str]],  # (filename, data, mimetype)
-    ) -> bool:
-        """Enviar email con archivos adjuntos usando SMTP."""
-        self._ensure_smtp_config()
-        if not self.smtp_configured:
-            logger.warning(f"SMTP not configured, would send email with attachment to {to_email}")
-            return False
-        try:
-            msg = MIMEMultipart('mixed')
-            msg['Subject'] = subject
-            msg['From'] = f"{self.smtp_from_name} <{self.smtp_from_email}>"
-            msg['To'] = to_email
-
-            # Body (alternative: text + html)
-            body = MIMEMultipart('alternative')
-            body.attach(MIMEText(text_content, 'plain', 'utf-8'))
-            body.attach(MIMEText(html_content, 'html', 'utf-8'))
-            msg.attach(body)
-
-            # Attachments
-            for filename, data, mimetype in attachments:
-                part = MIMEBase(*mimetype.split('/'))
-                part.set_payload(data)
-                encoders.encode_base64(part)
-                part.add_header('Content-Disposition', 'attachment', filename=filename)
-                msg.attach(part)
-
-            with smtplib.SMTP(self.smtp_host, self.smtp_port, timeout=10) as server:
-                if self.use_tls:
-                    server.starttls()
-                if self.smtp_user and self.smtp_password:
-                    server.login(self.smtp_user, self.smtp_password)
-                server.send_message(msg)
-
-            logger.info(f"Email with attachment sent to {to_email}")
-            return True
-        except Exception as e:
-            logger.error(f"Error sending email with attachment: {e}")
             return False
 
     async def send_employee_report_email(
@@ -675,7 +623,7 @@ class NotificationService:
                 "Si tienes preguntas, contáctate con tu gerente.\n\n"
                 "--- Mensaje automático, no respondas este correo ---"
             )
-            return self._send_smtp_email_with_attachment(
+            return await self._send_email_with_attachment(
                 to_email=employee_email,
                 subject=f"📊 Informe de desempeño — {employee_name} · {report_date}",
                 html_content=html_content,
