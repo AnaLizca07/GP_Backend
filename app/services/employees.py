@@ -34,6 +34,37 @@ class EmployeeService:
         try:
             logger.info(f"🚀 INICIANDO creación de empleado: {employee_data.email}")
 
+            admin_supabase = get_admin_supabase()
+
+            # Verificar si ya existe un empleado inactivo con este email → reactivar
+            existing_user_res = admin_supabase.table("users").select("id").eq("email", employee_data.email).execute()
+            if existing_user_res.data:
+                existing_user_id = existing_user_res.data[0]["id"]
+                existing_emp_res = admin_supabase.table("employees").select("*").eq("user_id", existing_user_id).execute()
+                if existing_emp_res.data:
+                    existing_emp = existing_emp_res.data[0]
+                    if existing_emp.get("status") == "inactive":
+                        logger.info(f"♻️ Empleado inactivo encontrado, reactivando: {employee_data.email}")
+                        reactivated = admin_supabase.table("employees").update({
+                            "status": "active",
+                            "manager_id": current_user.id,
+                            "name": employee_data.name,
+                            "position": employee_data.position,
+                            "phone": employee_data.phone,
+                            "address": employee_data.address,
+                            "salary_type": employee_data.salary_type,
+                            "salary_hourly": employee_data.salary_hourly,
+                            "salary_biweekly": employee_data.salary_biweekly,
+                            "salary_monthly": employee_data.salary_monthly,
+                            "updated_at": datetime.utcnow().isoformat()
+                        }).eq("id", existing_emp["id"]).execute()
+                        return self._build_employee_response(reactivated.data[0])
+                    else:
+                        raise HTTPException(
+                            status_code=status.HTTP_400_BAD_REQUEST,
+                            detail="Ya existe un empleado activo con este correo"
+                        )
+
             # 1. Generar contraseña temporal segura
             logger.info("📍 Paso 1: Generando contraseña temporal...")
             temporary_password = notification_service.generate_temporary_password()
@@ -42,8 +73,6 @@ class EmployeeService:
             # 2. Crear usuario en Supabase Auth usando cliente administrativo
             logger.info("📍 Paso 2: Obteniendo cliente administrativo...")
             try:
-                # Obtener cliente administrativo con service_role_key
-                admin_supabase = get_admin_supabase()
                 logger.info("✅ Cliente administrativo obtenido exitosamente")
 
                 logger.info(f"📍 Paso 2b: Creando usuario en Supabase Auth para: {employee_data.email}")
@@ -487,6 +516,34 @@ class EmployeeService:
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Error interno del servidor"
             )
+
+    async def reactivate_employee(self, employee_id: int, current_user: UserResponse) -> EmployeeResponse:
+        """Reactivar empleado inactivo (solo managers)"""
+        if current_user.role != UserRole.MANAGER:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Solo los managers pueden reactivar empleados")
+
+        try:
+            admin_client = get_admin_supabase()
+            existing = admin_client.table("employees").select("*").eq("id", employee_id).execute()
+            if not existing.data:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Empleado no encontrado")
+
+            emp = existing.data[0]
+            if emp.get("status") == "active":
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="El empleado ya está activo")
+
+            updated = admin_client.table("employees").update({
+                "status": "active",
+                "updated_at": datetime.utcnow().isoformat()
+            }).eq("id", employee_id).execute()
+
+            return self._build_employee_response(updated.data[0])
+
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Error al reactivar empleado: {e}")
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Error interno del servidor")
 
     async def get_employee_by_user_id(self, user_id: str, current_user: UserResponse) -> EmployeeResponse:
         """Obtener empleado por user_id"""
