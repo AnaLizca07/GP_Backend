@@ -110,6 +110,7 @@ class EmployeeUpdate(BaseModel):
 class EmployeeResponse(BaseModel):
     id: int
     user_id: str
+    manager_id: Optional[str] = None
     name: str
     identification: str
     position: Optional[str] = None
