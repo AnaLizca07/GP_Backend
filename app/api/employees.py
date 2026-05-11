@@ -224,14 +224,17 @@ async def upload_resume(
             current_user
         )
 
-        # RF05: Notificar a los gerentes sobre la nueva hoja de vida (en background)
+        # RF05: Notificar solo al gerente asignado al empleado
         try:
             sb = get_admin_supabase()
-            managers_res = sb.table("users").select("id, email").eq("role", "manager").execute()
-            for mgr in (managers_res.data or []):
-                if mgr.get("email"):
+            emp_res = sb.table("employees").select("manager_id").eq("id", employee_id).execute()
+            manager_id = emp_res.data[0].get("manager_id") if emp_res.data else None
+            if manager_id:
+                mgr_res = sb.table("users").select("email").eq("id", manager_id).execute()
+                mgr_email = mgr_res.data[0].get("email") if mgr_res.data else None
+                if mgr_email:
                     await notification_service.send_cv_upload_notification(
-                        manager_email=mgr["email"],
+                        manager_email=mgr_email,
                         manager_name="Gerente",
                         employee_name=updated_employee.name,
                         employee_id=employee_id,
