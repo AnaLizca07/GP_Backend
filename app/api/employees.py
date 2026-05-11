@@ -147,6 +147,18 @@ async def update_employee(
     """
     return await employee_service.update_employee(employee_id, employee_data, current_user)
 
+@router.put("/{employee_id}/reactivate", response_model=EmployeeResponse)
+async def reactivate_employee(
+    employee_id: int,
+    current_user: UserResponse = Depends(get_current_user)
+):
+    """
+    Reactivar empleado previamente desactivado
+
+    Acceso: Solo managers
+    """
+    return await employee_service.reactivate_employee(employee_id, current_user)
+
 @router.delete("/{employee_id}")
 async def delete_employee(
     employee_id: int,
