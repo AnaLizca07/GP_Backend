@@ -121,6 +121,7 @@ class EmployeeService:
                 logger.info("📍 Paso 4: Creando perfil en tabla employees...")
                 employee_insert = admin_supabase.table("employees").insert({
                     "user_id": user_id,
+                    "manager_id": current_user.id,
                     "name": employee_data.name,
                     "identification": employee_data.identification,
                     "position": employee_data.position,
@@ -326,8 +327,8 @@ class EmployeeService:
             # Usar cliente administrativo para evitar problemas de RLS
             admin_client = get_admin_supabase()
 
-            # Query base
-            query = admin_client.table("employees").select("*")
+            # Query base — filtrar por manager_id para que cada gerente vea solo sus empleados
+            query = admin_client.table("employees").select("*").eq("manager_id", current_user.id)
 
             # Filtrar por status si se especifica
             if status_filter:
@@ -342,8 +343,8 @@ class EmployeeService:
 
             employees_query = query.execute()
 
-            # Contar total de empleados usando el cliente administrativo
-            count_query = admin_client.table("employees").select("id", count="exact")
+            # Contar total de empleados del manager usando el cliente administrativo
+            count_query = admin_client.table("employees").select("id", count="exact").eq("manager_id", current_user.id)
             if status_filter:
                 count_query = count_query.eq("status", status_filter)
             count_result = count_query.execute()
