@@ -23,13 +23,15 @@ MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
 DELIVERABLES_BUCKET = "deliverables"
 
 # Tipos de archivo permitidos para entregables
-ALLOWED_EXTENSIONS = {"pdf", "doc", "docx", "xls", "xlsx"}
+ALLOWED_EXTENSIONS = {"pdf", "doc", "docx", "xls", "xlsx", "png", "jpg", "jpeg"}
 ALLOWED_MIME_TYPES = {
     "application/pdf",
     "application/msword",
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     "application/vnd.ms-excel",
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "image/png",
+    "image/jpeg",
 }
 
 
@@ -307,10 +309,13 @@ class TaskService:
 
             public_url = supabase.storage.from_(DELIVERABLES_BUCKET).get_public_url(path)
 
+            # Limitar file_name a 255 chars para evitar error de columna VARCHAR
+            raw_name = file.filename or path
+            safe_name = raw_name[:255] if raw_name else path[:255]
             record = {
                 "task_id": task_id,
                 "file_url": public_url,
-                "file_name": file.filename or path,
+                "file_name": safe_name,
                 "file_type": file.content_type or "application/octet-stream",
                 "file_size": len(content),
             }
