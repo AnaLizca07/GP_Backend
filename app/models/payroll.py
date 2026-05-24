@@ -155,7 +155,8 @@ class PayrollCalculationResult(BaseModel):
 class PayrollRecord(BaseModel):
     """Registro de nómina procesada - compatible con tabla payroll de BD"""
     id: Optional[int] = None
-    employee_id: int
+    employee_id: Optional[int] = None   # Nullable para registros del gerente
+    manager_name: Optional[str] = None  # Nombre del gerente (cuando employee_id es null)
     period_start: date
     period_end: date
     base_salary: float
@@ -178,8 +179,10 @@ class PayrollRecordCreate(BaseModel):
 class PayrollRecordResponse(BaseModel):
     """Response de registro de nómina"""
     id: int
-    employee_id: int
-    employee_name: str
+    employee_id: Optional[int] = None       # Null para registros del gerente
+    employee_name: Optional[str] = None     # Null para registros del gerente
+    manager_name: Optional[str] = None      # Sólo para registros del gerente
+    is_manager_record: bool = False         # True si es compensación del gerente
     period_start: date
     period_end: date
     base_salary: float

@@ -100,6 +100,66 @@ class PayrollDatabaseService:
             logger.error(f"Error guardando registro de nómina: {str(e)}")
             raise
 
+    async def save_manager_payroll_record(
+        self,
+        manager_name: str,
+        period_start: date,
+        period_end: date,
+        amount: float,
+        processed_by: str
+    ) -> "PayrollRecordResponse":
+        """
+        Guarda compensación del gerente como registro de nómina
+        (employee_id queda NULL, se usa manager_name en su lugar)
+        """
+        try:
+            payroll_data = {
+                "employee_id": None,
+                "manager_name": manager_name,
+                "period_start": period_start.isoformat(),
+                "period_end": period_end.isoformat(),
+                "base_salary": float(amount),
+                "deductions": {},
+                "employer_contributions": {},
+                "benefits": {},
+                "bonuses": [],
+                "net_pay": float(amount),
+                "status": "paid",
+                "processed_by": processed_by,
+            }
+
+            result = self.db.table("payroll").insert(payroll_data).execute()
+
+            if not result.data:
+                raise Exception("No se pudo guardar la compensación del gerente")
+
+            record_data = result.data[0]
+            logger.info(f"Compensación del gerente guardada con ID: {record_data['id']}")
+
+            from app.models.payroll import PayrollRecordResponse
+            return PayrollRecordResponse(
+                id=record_data["id"],
+                employee_id=None,
+                employee_name=None,
+                manager_name=record_data.get("manager_name"),
+                is_manager_record=True,
+                period_start=date.fromisoformat(record_data["period_start"]),
+                period_end=date.fromisoformat(record_data["period_end"]),
+                base_salary=record_data["base_salary"],
+                deductions=record_data.get("deductions") or {},
+                employer_contributions=record_data.get("employer_contributions") or {},
+                benefits=record_data.get("benefits") or {},
+                net_pay=record_data["net_pay"],
+                status=record_data["status"],
+                receipt_url=record_data.get("receipt_url"),
+                created_at=datetime.fromisoformat(record_data["created_at"]),
+                paid_at=datetime.fromisoformat(record_data["paid_at"]) if record_data.get("paid_at") else None,
+            )
+
+        except Exception as e:
+            logger.error(f"Error guardando compensación del gerente: {str(e)}")
+            raise
+
     async def get_payroll_records(
         self,
         employee_id: Optional[int] = None,
@@ -107,7 +167,8 @@ class PayrollDatabaseService:
         month: Optional[int] = None,
         status: Optional[str] = None,
         limit: int = 50,
-        offset: int = 0
+        offset: int = 0,
+        manager_id: Optional[str] = None
     ) -> List[PayrollRecordResponse]:
         """
         Obtiene registros de nómina con filtros
@@ -124,9 +185,11 @@ class PayrollDatabaseService:
             List[PayrollRecordResponse]: Lista de registros de nómina
         """
         try:
+            # LEFT join para incluir registros del gerente (employee_id NULL)
             query = self.db.table("payroll").select("""
                 id,
                 employee_id,
+                manager_name,
                 period_start,
                 period_end,
                 base_salary,
@@ -138,10 +201,15 @@ class PayrollDatabaseService:
                 receipt_url,
                 created_at,
                 paid_at,
-                employees!inner(name)
+                processed_by,
+                employees(name)
             """)
 
-            # Aplicar filtros
+            # Filtrar por manager: todos los registros que este manager procesó
+            if manager_id:
+                query = query.eq("processed_by", manager_id)
+
+            # Aplicar filtros adicionales
             if employee_id:
                 query = query.eq("employee_id", employee_id)
 
@@ -170,16 +238,24 @@ class PayrollDatabaseService:
             records = []
             if result.data:
                 for record_data in result.data:
+                    # LEFT join: employees puede ser None para registros del gerente
+                    emp_data = record_data.get("employees") or {}
+                    emp_name = emp_data.get("name") if isinstance(emp_data, dict) else None
+                    mgr_name = record_data.get("manager_name")
+                    is_mgr = record_data.get("employee_id") is None
+
                     records.append(PayrollRecordResponse(
                         id=record_data["id"],
-                        employee_id=record_data["employee_id"],
-                        employee_name=record_data["employees"]["name"],
+                        employee_id=record_data.get("employee_id"),
+                        employee_name=emp_name,
+                        manager_name=mgr_name,
+                        is_manager_record=is_mgr,
                         period_start=date.fromisoformat(record_data["period_start"]),
                         period_end=date.fromisoformat(record_data["period_end"]),
                         base_salary=record_data["base_salary"],
-                        deductions=record_data["deductions"],
-                        employer_contributions=record_data["employer_contributions"],
-                        benefits=record_data["benefits"],
+                        deductions=record_data.get("deductions") or {},
+                        employer_contributions=record_data.get("employer_contributions") or {},
+                        benefits=record_data.get("benefits") or {},
                         net_pay=record_data["net_pay"],
                         status=record_data["status"],
                         receipt_url=record_data.get("receipt_url"),
@@ -207,6 +283,7 @@ class PayrollDatabaseService:
             result = self.db.table("payroll").select("""
                 id,
                 employee_id,
+                manager_name,
                 period_start,
                 period_end,
                 base_salary,
@@ -218,21 +295,28 @@ class PayrollDatabaseService:
                 receipt_url,
                 created_at,
                 paid_at,
-                employees!inner(name)
+                employees(name)
             """).eq("id", payroll_id).execute()
 
             if result.data:
                 record_data = result.data[0]
+                emp_data = record_data.get("employees") or {}
+                emp_name = emp_data.get("name") if isinstance(emp_data, dict) else None
+                mgr_name = record_data.get("manager_name")
+                is_mgr = record_data.get("employee_id") is None
+
                 return PayrollRecordResponse(
                     id=record_data["id"],
-                    employee_id=record_data["employee_id"],
-                    employee_name=record_data["employees"]["name"],
+                    employee_id=record_data.get("employee_id"),
+                    employee_name=emp_name,
+                    manager_name=mgr_name,
+                    is_manager_record=is_mgr,
                     period_start=date.fromisoformat(record_data["period_start"]),
                     period_end=date.fromisoformat(record_data["period_end"]),
                     base_salary=record_data["base_salary"],
-                    deductions=record_data["deductions"],
-                    employer_contributions=record_data["employer_contributions"],
-                    benefits=record_data["benefits"],
+                    deductions=record_data.get("deductions") or {},
+                    employer_contributions=record_data.get("employer_contributions") or {},
+                    benefits=record_data.get("benefits") or {},
                     net_pay=record_data["net_pay"],
                     status=record_data["status"],
                     receipt_url=record_data.get("receipt_url"),
@@ -300,13 +384,14 @@ class PayrollDatabaseService:
         try:
             result = self.db.table("payroll").select("""
                 employee_id,
+                manager_name,
                 base_salary,
                 deductions,
                 employer_contributions,
                 benefits,
                 net_pay,
                 status,
-                employees!inner(name)
+                employees(name)
             """).gte("period_start", period_start.isoformat())\
               .lte("period_end", period_end.isoformat()).execute()
 
@@ -359,10 +444,13 @@ class PayrollDatabaseService:
                     by_status[status] = 0
                 by_status[status] += 1
 
-                # Agregar empleado al resumen
+                # Agregar empleado/gerente al resumen
+                emp_data = record.get("employees") or {}
+                emp_name = (emp_data.get("name") if isinstance(emp_data, dict) else None) \
+                           or record.get("manager_name") or "Gerente"
                 employees.append({
-                    "employee_id": record["employee_id"],
-                    "employee_name": record["employees"]["name"],
+                    "employee_id": record.get("employee_id"),
+                    "employee_name": emp_name,
                     "base_salary": record["base_salary"],
                     "net_pay": record["net_pay"],
                     "status": status

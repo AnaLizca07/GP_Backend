@@ -878,19 +878,21 @@ async def mark_payroll_as_paid_endpoint(
                 detail="Registro de nómina no encontrado"
             )
 
-        # Generar comprobante PDF, subirlo y enviar email
-        generated_url = await process_payroll_receipt(
-            payroll_id=payroll_id,
-            employee_id=record.employee_id,
-            employee_name=record.employee_name,
-            period_start=record.period_start.strftime("%d/%m/%Y"),
-            period_end=record.period_end.strftime("%d/%m/%Y"),
-            base_salary=float(record.base_salary),
-            deductions=record.deductions or {},
-            employer_contributions=record.employer_contributions or {},
-            benefits=record.benefits or {},
-            net_pay=float(record.net_pay),
-        )
+        # Generar comprobante PDF — solo para registros de empleado
+        generated_url = None
+        if not record.is_manager_record and record.employee_id:
+            generated_url = await process_payroll_receipt(
+                payroll_id=payroll_id,
+                employee_id=record.employee_id,
+                employee_name=record.employee_name or "",
+                period_start=record.period_start.strftime("%d/%m/%Y"),
+                period_end=record.period_end.strftime("%d/%m/%Y"),
+                base_salary=float(record.base_salary),
+                deductions=record.deductions or {},
+                employer_contributions=record.employer_contributions or {},
+                benefits=record.benefits or {},
+                net_pay=float(record.net_pay),
+            )
 
         final_url = receipt_url or generated_url
 
@@ -951,6 +953,48 @@ async def get_payroll_summary_by_period_endpoint(
             detail=f"Error obteniendo resumen de período: {str(e)}"
         )
 
+@router.post("/manager-payment", response_model=PayrollRecordResponse)
+async def register_manager_payment(
+    period_start: date,
+    period_end: date,
+    amount: float,
+    current_user: UserResponse = Depends(require_manager)
+):
+    """
+    Registrar compensación/salario del gerente en la tabla de nómina.
+
+    El registro se guarda con employee_id=NULL y manager_name con el email/nombre
+    del gerente autenticado. No aparece en el módulo de egresos/gastos.
+
+    Acceso: Solo gerentes
+    """
+    _require_project_exists(current_user.id)
+    if amount <= 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="El monto debe ser mayor a 0"
+        )
+
+    try:
+        # Usar email del gerente como nombre (es lo que se guarda en auth)
+        manager_name = current_user.email or f"Gerente {current_user.id[:8]}"
+
+        record = await payroll_db_service.save_manager_payroll_record(
+            manager_name=manager_name,
+            period_start=period_start,
+            period_end=period_end,
+            amount=amount,
+            processed_by=current_user.id,
+        )
+        return record
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error registrando compensación del gerente: {str(e)}"
+        )
+
+
 @router.get("/records")
 async def get_all_payroll_records(
     status_filter: Optional[str] = Query(None, regex="^(pending|processed|paid)$", description="Filtrar por estado"),
@@ -975,7 +1019,8 @@ async def get_all_payroll_records(
             year=year,
             month=month,
             limit=limit,
-            offset=offset
+            offset=offset,
+            manager_id=current_user.id
         )
 
         # Calcular resumen
